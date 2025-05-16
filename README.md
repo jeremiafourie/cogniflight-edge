@@ -2,18 +2,18 @@
 
 # Cogniflight Edge
 Edge-device software for Cogniflight: orchestrating on-device sensor capture, real-time fatigue inference, and secure uplink of critical alerts and metrics.
-# Overview
+## Overview
 [TODO]
-# Hardware Requirements
+## Hardware Requirements
 [TODO]
-# Software Prereqs
+## Software Prereqs
 [TODO]
-# Installation
+## Installation
 [TODO]
-# Configuration
+## Configuration
 [TODO]
-# Running
+## Running
 [TODO]
-# File Structure
+## File Structure
 [TODO]
-# Contributing
+## Contributing

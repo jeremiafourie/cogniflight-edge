@@ -55,6 +55,7 @@ def recognize(frame, known_embeddings, threshold=0.4):
     for face in faces:
         x1, y1, x2, y2 = list(map(int, face['bbox']))
         face_emb = face['embedding']
+        print(face_emb.shape)
 
         best_match = "Unknown"
         best_sim = -1.0

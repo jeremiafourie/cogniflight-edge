@@ -1,0 +1,19 @@
+[Unit]
+Description=%i service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Environment=HEARTBEAT_DIR=/run/edge_hb
+WorkingDirectory=/opt/edge-software/services/%i
+ExecStart=/usr/bin/python3 main.py
+Restart=on-failure
+RestartSec=2
+# cgroup limits (example)
+CPUQuota=20%
+MemoryMax=50M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+[Unit]
+Description=Edge‐Software Watchdog Timer
+
+[Timer]
+OnBootSec=10
+OnUnitActiveSec=10
+
+[Install]
+WantedBy=timers.target

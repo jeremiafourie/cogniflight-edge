@@ -26,23 +26,6 @@ The system operates through well-defined states managed by CogniCore:
 7. **SYSTEM_ERROR** - Service error or malfunction
 8. **SYSTEM_CRASHED** - Critical system failure, watchdog unable to recover
 
-## Fatigue Detection Algorithm
-
-### Vision Processing
-
-- **Eye Aspect Ratio (EAR)**: Calculated from 6 eye landmarks per eye
-- **Mouth Aspect Ratio (MAR)**: Calculated from 6 mouth landmarks
-- **Real-time Analysis**: 30fps camera processing with MediaPipe
-
-### Fatigue Classification
-
-- **Active** (< 0.3): Normal alertness level
-- **Mild** (0.3-0.6): Early fatigue indicators
-- **Moderate** (0.6-0.8): Significant fatigue detected
-- **Severe** (> 0.8): Critical fatigue requiring immediate attention
-
-Thresholds are personalized based on pilot alert sensitivity preferences.
-
 ## Directory Structure
 
 ```

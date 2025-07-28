@@ -222,8 +222,8 @@ Comprehensive logging includes:
 env_monitor/
 ├── main.py           # Main service implementation
 ├── README.md         # This documentation
-├── Adafruit_DHT.py   # Local DHT library fallback (if needed)
-└── systemd/          # Service configuration files
+├── requirements.txt   # External dependencies
+└── env_monitor.service         # Service configuration file
 ```
 
 ## Integration

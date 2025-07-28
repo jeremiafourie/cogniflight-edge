@@ -1,0 +1,33 @@
+[Unit]
+Description=CogniFlight HR Monitor Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=jeremia
+Group=jeremia
+WorkingDirectory=/home/jeremia/Desktop/cogniflight-edge/services/hr_monitor
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/home/jeremia/Desktop/cogniflight-edge
+Environment=HEARTBEAT_DIR=/run/cogniflight
+ExecStart=/usr/bin/python3 main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Runtime directory for heartbeat files
+RuntimeDirectory=cogniflight
+RuntimeDirectoryMode=0755
+
+# Resource limits
+MemoryMax=256M
+CPUQuota=20%
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

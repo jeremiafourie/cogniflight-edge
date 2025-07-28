@@ -1,0 +1,6 @@
+# BLE service requirements
+bleak>=0.20.0
+asyncio-mqtt
+
+# For CogniCore communication
+redis

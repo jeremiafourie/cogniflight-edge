@@ -1,0 +1,21 @@
+# Core computer vision and AI
+opencv-python
+numpy
+insightface
+onnxruntime
+
+# Image processing
+Pillow
+
+# Scientific computing
+scipy
+scikit-learn
+
+# Raspberry Pi camera support (optional, for Pi Camera)
+picamera2
+
+# Utilities
+tqdm
+
+# For CogniCore communication
+redis

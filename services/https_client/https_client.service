@@ -1,0 +1,27 @@
+[Unit]
+Description=https_client service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jeremia
+Group=jeremia
+Environment=HEARTBEAT_DIR=/run/cogniflight
+WorkingDirectory=/home/jeremia/Desktop/cogniflight-edge/services/https_client
+ExecStart=/usr/bin/python3 main.py
+Restart=on-failure
+RestartSec=2
+
+# Runtime directory for heartbeat files
+RuntimeDirectory=cogniflight
+RuntimeDirectoryMode=0755
+
+# Resource limits - Optimized for RPi5 16GB
+MemoryMax=128M
+CPUQuota=15%
+CPUWeight=50
+Nice=15
+
+[Install]
+WantedBy=multi-user.target

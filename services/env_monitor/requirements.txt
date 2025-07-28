@@ -1,0 +1,8 @@
+# Sensor service requirements
+# For DHT22 temperature/humidity sensor
+adafruit-circuitpython-dht
+board
+lgpio
+RPi.GPIO
+# For CogniCore communication
+redis

@@ -190,12 +190,12 @@ class CogniCore:
                 hash_name = key[15:]  # Remove 'cognicore:data:' prefix
                 if hash_name in self._data_subscribers:
                     data = self.get_data(hash_name)
-                    if data:
-                        for callback in self._data_subscribers[hash_name]:
-                            try:
-                                callback(hash_name, data)
-                            except Exception as e:
-                                logger.error(f"Error in data subscriber callback: {e}")
+                    # Call callbacks even if data is None (hash deleted/cleared)
+                    for callback in self._data_subscribers[hash_name]:
+                        try:
+                            callback(hash_name, data)
+                        except Exception as e:
+                            logger.error(f"Error in data subscriber callback: {e}")
             
             elif key == 'cognicore:state':
                 # System state change
@@ -211,13 +211,14 @@ class CogniCore:
     
     # ==================== DATA OPERATIONS ====================
     
-    def publish_data(self, hash_name: str, data: Dict[str, Any]):
+    def publish_data(self, hash_name: str, data: Dict[str, Any], persistent: bool = None):
         """
         Publish data to a Redis hash
         
         Args:
             hash_name: Name of the data hash (e.g., 'vision', 'hr', 'fusion')
             data: Data to publish
+            persistent: Whether to skip TTL. If None, auto-determined by hash_name
             
         Raises:
             ValidationError: If parameters are invalid
@@ -227,6 +228,17 @@ class CogniCore:
             raise ValidationError("hash_name must be a non-empty string")
         if not isinstance(data, dict):
             raise ValidationError("data must be a dictionary")
+        
+        # Auto-determine persistence for specific data types
+        if persistent is None:
+            persistent_patterns = [
+                'pilot_cache:',      # Pilot cache data (persistent)
+                'network_outbox',    # Failed MQTT telemetry (persistent)
+                'embedding:',        # Face embeddings (persistent)
+            ]
+            persistent = any(hash_name.startswith(pattern) or hash_name == pattern 
+                           for pattern in persistent_patterns)
+        
         # Add metadata
         enriched_data = {
             **data,
@@ -241,8 +253,8 @@ class CogniCore:
                          for k, v in enriched_data.items()}
             
             self._redis_client.hset(key, mapping=redis_data)
-            # Set configurable TTL to prevent stale data
-            self._redis_client.expire(key, self.redis_ttl)
+            
+            # Persistent data survives via Redis built-in persistence (RDB/AOF)
             
         except (redis.ConnectionError, redis.TimeoutError) as e:
             logger.error(f"Failed to publish data to {hash_name}: {e}")
@@ -374,56 +386,75 @@ class CogniCore:
     # ==================== PILOT PROFILES ====================
     
     def set_pilot_profile(self, profile: PilotProfile):
-        """Store pilot profile in Redis"""
+        """Set active pilot profile (temporary, created from cache or server fetch)"""
         from dataclasses import asdict
         
         profile_data = asdict(profile)
         profile_data['last_updated'] = time.time()
         
-        self.publish_data(f'pilot:{profile.id}', profile_data)
+        # Store active pilot data (temporary with TTL)
+        active_pilot_data = {
+            'pilot_id': profile.id,
+            'profile_loaded': True, 
+            'loaded_by': self.service_name,
+            # Include all profile data
+            'name': profile.name,
+            'flightHours': profile.flightHours,
+            'baseline': profile.baseline,
+            'environmentPreferences': profile.environmentPreferences
+        }
         
-        # Set as active pilot - use direct Redis operations to preserve existing data
-        try:
-            key = "cognicore:data:active_pilot"
-            # Update specific fields while preserving others
-            updates = {
-                'pilot_id': json.dumps(profile.id),
-                'profile_loaded': json.dumps(True), 
-                'loaded_by': json.dumps(self.service_name),
-                'timestamp': json.dumps(time.time()),
-                'service': json.dumps(self.service_name)
-            }
-            self._redis_client.hset(key, mapping=updates)
-            
-            # Remove cleared flag when setting an active pilot
-            self._redis_client.hdel(key, 'cleared', 'reason')
-            
-            # Set TTL
-            self._redis_client.expire(key, self.redis_ttl)
-        except (redis.ConnectionError, redis.TimeoutError) as e:
-            logger.error(f"Failed to set active pilot: {e}")
-            raise
+        # Use publish_data for active_pilot (will get TTL)
+        self.publish_data('active_pilot', active_pilot_data)
         
-        # Add to pilot index
-        try:
-            self._redis_client.sadd("cognicore:pilot_index", profile.id)
-        except (redis.ConnectionError, redis.TimeoutError):
-            logger.error("Failed to update pilot index")
-            raise
-        
-        logger.info(f"Stored pilot profile: {profile.id}")
+        logger.info(f"Set active pilot profile: {profile.id} (temporary, TTL applied)")
     
     def get_pilot_profile(self, pilot_id: str) -> Optional[PilotProfile]:
-        """Get pilot profile from Redis"""
-        profile_data = self.get_data(f'pilot:{pilot_id}')
-        if profile_data:
+        """Get pilot profile from pilot_cache or active_pilot"""
+        # First try pilot_cache
+        cache_data = self.get_data(f'pilot_cache:{pilot_id}')
+        if cache_data and 'profile_data' in cache_data:
             try:
-                # Remove metadata fields
-                clean_data = {k: v for k, v in profile_data.items() 
-                            if k not in ['timestamp', 'service', 'last_updated']}
-                return PilotProfile(**clean_data)
-            except TypeError as e:
-                logger.error(f"Invalid pilot profile data for {pilot_id}: {e}")
+                profile_data = cache_data['profile_data']
+                return PilotProfile(
+                    id=profile_data['id'],
+                    name=profile_data['name'], 
+                    flightHours=profile_data['flightHours'],
+                    baseline=profile_data['baseline'],
+                    environmentPreferences=profile_data['environmentPreferences']
+                )
+            except (KeyError, TypeError) as e:
+                logger.error(f"Error parsing cached profile data for {pilot_id}: {e}")
+        
+        # Fallback to active_pilot if it matches
+        active_data = self.get_data('active_pilot')
+        if active_data and active_data.get('pilot_id') == pilot_id:
+            try:
+                return PilotProfile(
+                    id=active_data['pilot_id'],
+                    name=active_data['name'],
+                    flightHours=active_data['flightHours'], 
+                    baseline=active_data['baseline'],
+                    environmentPreferences=active_data['environmentPreferences']
+                )
+            except (KeyError, TypeError) as e:
+                logger.error(f"Error parsing active pilot data for {pilot_id}: {e}")
+        return None
+    
+    def get_active_pilot_profile(self) -> Optional[PilotProfile]:
+        """Get currently active pilot profile"""
+        active_data = self.get_data('active_pilot')
+        if active_data and active_data.get('profile_loaded'):
+            try:
+                return PilotProfile(
+                    id=active_data['pilot_id'],
+                    name=active_data['name'],
+                    flightHours=active_data['flightHours'], 
+                    baseline=active_data['baseline'],
+                    environmentPreferences=active_data['environmentPreferences']
+                )
+            except (KeyError, TypeError) as e:
+                logger.error(f"Error parsing active pilot data: {e}")
         return None
     
     def get_active_pilot(self) -> Optional[str]:
@@ -471,39 +502,6 @@ class CogniCore:
     
     # ==================== COMMON UTILITIES ====================
     
-    def write_heartbeat(self, service_name: Optional[str] = None) -> bool:
-        """
-        Write current timestamp to heartbeat file for the given service.
-        
-        Args:
-            service_name: Name of the service (defaults to self.service_name)
-            
-        Returns:
-            True if heartbeat was written successfully, False otherwise
-        """
-        service = service_name or self.service_name
-        try:
-            # Ensure heartbeat directory exists
-            heartbeat_dir = config.HEARTBEAT_DIR
-            os.makedirs(heartbeat_dir, exist_ok=True)
-            
-            # Write current timestamp to heartbeat file
-            heartbeat_file = os.path.join(heartbeat_dir, f"{service}.hb")
-            current_time = str(int(time.time()))
-            
-            # Atomic write for safety
-            temp_file = f"{heartbeat_file}.tmp"
-            with open(temp_file, 'w') as f:
-                f.write(current_time)
-                f.flush()
-                os.fsync(f.fileno())
-            os.rename(temp_file, heartbeat_file)
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to write heartbeat for {service}: {e}")
-            return False
     
     def ensure_directory(self, path: str) -> bool:
         """

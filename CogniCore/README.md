@@ -1,6 +1,6 @@
 # CogniCore - Thread-Safe Redis Communication Library
 
-CogniCore is a thread-safe Redis communication library designed for a mission-critical embedded system. It provides centralized state management, real-time data sharing, and robust inter-service communication through Redis pub/sub with connection pooling and proper resource management.
+CogniCore is a thread-safe Redis communication library designed for mission-critical embedded systems. It provides centralized state management, real-time data sharing, and robust inter-service communication through Redis pub/sub with connection pooling and proper resource management.
 
 ## Core Features
 
@@ -183,8 +183,6 @@ all_pilots = core.list_pilots()
 core.is_connected() -> bool
 core.get_stats() -> Dict[str, Any]
 
-# Heartbeat for watchdog
-core.write_heartbeat(service_name: Optional[str] = None) -> bool
 
 # Logging
 logger = core.get_logger(name: Optional[str] = None) -> logging.Logger
@@ -202,9 +200,9 @@ class SystemState(Enum):
     SCANNING = "scanning"                    # Looking for pilot/sensors
     INTRUDER_DETECTED = "intruder_detected"  # Unauthorized person detected
     MONITORING_ACTIVE = "monitoring_active"  # Normal monitoring mode
-    ALERT_MILD = "alert_mild"               # Stage 1 mild fatigue warning
-    ALERT_MODERATE = "alert_moderate"       # Stage 2 moderate fatigue warning
-    ALERT_SEVERE = "alert_severe"           # Stage 3 severe alert
+    ALERT_MILD = "alert_mild"               # Early fatigue warning
+    ALERT_MODERATE = "alert_moderate"       # Escalated warning
+    ALERT_SEVERE = "alert_severe"           # Critical alert
     SYSTEM_ERROR = "system_error"           # Service malfunction
     SYSTEM_CRASHED = "system_crashed"       # Critical failure
 ```
@@ -269,9 +267,8 @@ export REDIS_TTL=300
 export REDIS_HEALTH_CHECK=30
 export STATE_HISTORY_LIMIT=1000
 
-# Heartbeat Directory (must be writable)
-sudo mkdir -p /run/edge_hb
-sudo chmod 777 /run/edge_hb
+# Systemd Integration (no manual setup required)
+# Services use systemd.daemon for native watchdog functionality
 ```
 
 ### Service Integration
@@ -280,6 +277,7 @@ sudo chmod 777 /run/edge_hb
 # Production service template
 import signal
 import sys
+import systemd.daemon
 from CogniCore import CogniCore, SystemState
 
 class MyService:
@@ -295,11 +293,14 @@ class MyService:
 
         self.logger.info("Service starting...")
 
+        # Notify systemd that service is ready
+        systemd.daemon.notify('READY=1')
+
         try:
             # Main service loop
             while self.running:
-                # Write heartbeat for watchdog
-                self.core.write_heartbeat()
+                # Send systemd watchdog keepalive
+                systemd.daemon.notify('WATCHDOG=1')
 
                 # Your service logic here
                 time.sleep(1)
@@ -328,6 +329,7 @@ if __name__ == "__main__":
 - **Python 3.8+**
 - **Redis Server 4.0+** with keyspace notifications enabled
 - **redis-py >= 4.0.0**
+- **systemd-python >= 235** for service integration
 
 ### Redis Configuration
 
@@ -358,4 +360,4 @@ redis-cli CONFIG SET notify-keyspace-events Kh
 
 ---
 
-**Communication library for our mission-critical embedded system**
+**Production-ready communication library for mission-critical embedded systems.**

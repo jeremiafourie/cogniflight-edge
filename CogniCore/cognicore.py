@@ -81,6 +81,9 @@ class CogniCore:
         # Connect to Redis - will raise exception if fails
         self._connect()
         
+        # Initialize logger for internal use
+        self.logger = self.get_logger()
+        
     def _connect(self):
         """Connect to Redis - raises exception if Redis unavailable"""
         try:
@@ -232,7 +235,7 @@ class CogniCore:
         # Auto-determine persistence for specific data types
         if persistent is None:
             persistent_patterns = [
-                'pilot_cache:',      # Pilot cache data (persistent)
+                'pilot:',            # Pilot profiles (persistent)
                 'network_outbox',    # Failed MQTT telemetry (persistent)
                 'embedding:',        # Face embeddings (persistent)
             ]
@@ -253,6 +256,10 @@ class CogniCore:
                          for k, v in enriched_data.items()}
             
             self._redis_client.hset(key, mapping=redis_data)
+            
+            # Apply TTL to non-persistent data (like active_pilot)
+            if not persistent:
+                self._redis_client.expire(key, self.redis_ttl)
             
             # Persistent data survives via Redis built-in persistence (RDB/AOF)
             
@@ -385,16 +392,14 @@ class CogniCore:
     
     # ==================== PILOT PROFILES ====================
     
-    def set_pilot_profile(self, profile: PilotProfile):
-        """Set active pilot profile (temporary, created from cache or server fetch)"""
+    def set_pilot_profile(self, profile: PilotProfile, activate: bool = True):
+        """Set pilot profile and optionally activate"""
         from dataclasses import asdict
         
-        profile_data = asdict(profile)
-        profile_data['last_updated'] = time.time()
-        
-        # Store active pilot data (temporary with TTL)
-        active_pilot_data = {
+        # Store pilot data persistently (no TTL - profiles survive restarts)
+        pilot_data = {
             'pilot_id': profile.id,
+            'active': activate,  # Active flag for current session
             'profile_loaded': True, 
             'loaded_by': self.service_name,
             # Include all profile data
@@ -404,98 +409,100 @@ class CogniCore:
             'environmentPreferences': profile.environmentPreferences
         }
         
-        # Use publish_data for active_pilot (will get TTL)
-        self.publish_data('active_pilot', active_pilot_data)
+        # Use publish_data - will be persistent due to 'pilot:' pattern
+        self.publish_data(f'pilot:{profile.id}', pilot_data)
         
-        logger.info(f"Set active pilot profile: {profile.id} (temporary, TTL applied)")
+        status = "activated" if activate else "stored"
+        self.logger.info(f"Pilot profile {status}: {profile.id} (persistent)")
     
     def get_pilot_profile(self, pilot_id: str) -> Optional[PilotProfile]:
-        """Get pilot profile from pilot_cache or active_pilot"""
-        # First try pilot_cache
-        cache_data = self.get_data(f'pilot_cache:{pilot_id}')
-        if cache_data and 'profile_data' in cache_data:
-            try:
-                profile_data = cache_data['profile_data']
-                return PilotProfile(
-                    id=profile_data['id'],
-                    name=profile_data['name'], 
-                    flightHours=profile_data['flightHours'],
-                    baseline=profile_data['baseline'],
-                    environmentPreferences=profile_data['environmentPreferences']
-                )
-            except (KeyError, TypeError) as e:
-                logger.error(f"Error parsing cached profile data for {pilot_id}: {e}")
-        
-        # Fallback to active_pilot if it matches
-        active_data = self.get_data('active_pilot')
-        if active_data and active_data.get('pilot_id') == pilot_id:
+        """Get pilot profile by pilot_id"""
+        pilot_data = self.get_data(f'pilot:{pilot_id}')
+        if pilot_data and pilot_data.get('profile_loaded'):
             try:
                 return PilotProfile(
-                    id=active_data['pilot_id'],
-                    name=active_data['name'],
-                    flightHours=active_data['flightHours'], 
-                    baseline=active_data['baseline'],
-                    environmentPreferences=active_data['environmentPreferences']
+                    id=pilot_data['pilot_id'],
+                    name=pilot_data['name'],
+                    flightHours=pilot_data['flightHours'], 
+                    baseline=pilot_data['baseline'],
+                    environmentPreferences=pilot_data['environmentPreferences']
                 )
             except (KeyError, TypeError) as e:
-                logger.error(f"Error parsing active pilot data for {pilot_id}: {e}")
+                self.logger.error(f"Error parsing pilot data for {pilot_id}: {e}")
+        return None
+    
+    def get_active_pilot(self) -> Optional[str]:
+        """Get currently active pilot ID"""
+        # Check all pilot keys for active pilot
+        try:
+            pilot_keys = self._redis_client.keys("cognicore:data:pilot:*")
+            for key in pilot_keys:
+                # Handle both bytes and string keys
+                if isinstance(key, bytes):
+                    pilot_id = key.decode().split(":")[-1]
+                else:
+                    pilot_id = key.split(":")[-1]
+                    
+                pilot_data = self.get_data(f'pilot:{pilot_id}')
+                if pilot_data and pilot_data.get('active', False):
+                    return pilot_data.get('pilot_id')
+        except Exception as e:
+            # Use self.logger instead of undefined logger
+            self.logger.error(f"Error finding active pilot: {e}")
         return None
     
     def get_active_pilot_profile(self) -> Optional[PilotProfile]:
         """Get currently active pilot profile"""
-        active_data = self.get_data('active_pilot')
-        if active_data and active_data.get('profile_loaded'):
-            try:
-                return PilotProfile(
-                    id=active_data['pilot_id'],
-                    name=active_data['name'],
-                    flightHours=active_data['flightHours'], 
-                    baseline=active_data['baseline'],
-                    environmentPreferences=active_data['environmentPreferences']
-                )
-            except (KeyError, TypeError) as e:
-                logger.error(f"Error parsing active pilot data: {e}")
-        return None
-    
-    def get_active_pilot(self) -> Optional[str]:
-        """Get active pilot ID"""
-        active_data = self.get_data('active_pilot')
-        if active_data:
-            pilot_id = active_data.get('pilot_id')
-            # Return None for empty pilot_id (cleared state)
-            # Convert pilot_id to string to handle both string and integer values from Redis
-            if pilot_id:
-                pilot_id_str = str(pilot_id)
-                return pilot_id_str if pilot_id_str.strip() else None
-            return None
-        return None
-    
-    def get_active_pilot_profile(self) -> Optional[PilotProfile]:
-        """Get active pilot profile"""
         pilot_id = self.get_active_pilot()
         return self.get_pilot_profile(pilot_id) if pilot_id else None
     
-    def clear_active_pilot(self):
-        """Clear active pilot by setting empty values to trigger subscriptions"""
-        try:
-            # Set empty pilot_id to trigger keyspace notifications for subscriptions
-            self.publish_data('active_pilot', {
-                'pilot_id': '',
-                'cleared': True,
-                'reason': 'face_recognition_restart'
-            })
-            logger.info("Active pilot cleared with empty pilot_id to trigger handover")
-        except (redis.ConnectionError, redis.TimeoutError):
-            logger.error("Failed to clear active pilot")
-            raise
+    def set_pilot_active(self, pilot_id: str, active: bool = True):
+        """Set pilot active status"""
+        pilot_data = self.get_data(f'pilot:{pilot_id}')
+        if pilot_data:
+            pilot_data['active'] = active
+            self.publish_data(f'pilot:{pilot_id}', pilot_data)
+            status = "activated" if active else "deactivated"
+            self.logger.info(f"Pilot {pilot_id} {status}")
+            return True
+        else:
+            self.logger.warning(f"Cannot set active status - pilot {pilot_id} not found")
+            return False
     
-    def list_pilots(self) -> list[str]:
-        """Get list of all stored pilot IDs"""
+    def deactivate_all_pilots(self):
+        """Deactivate all pilots (for face recognition startup)"""
         try:
-            return list(self._redis_client.smembers("cognicore:pilot_index"))
-        except (redis.ConnectionError, redis.TimeoutError):
-            logger.error("Failed to list pilots")
-            raise
+            pilot_keys = self._redis_client.keys("cognicore:data:pilot:*")
+            for key in pilot_keys:
+                # Handle both bytes and string keys
+                if isinstance(key, bytes):
+                    pilot_id = key.decode().split(":")[-1]
+                else:
+                    pilot_id = key.split(":")[-1]
+                    
+                pilot_data = self.get_data(f'pilot:{pilot_id}')
+                if pilot_data and pilot_data.get('active', False):
+                    pilot_data['active'] = False
+                    pilot_data['reason'] = 'face_recognition_startup'
+                    self.publish_data(f'pilot:{pilot_id}', pilot_data)
+                    self.logger.info(f"Deactivated pilot {pilot_id} on face recognition startup")
+        except Exception as e:
+            self.logger.error(f"Error deactivating pilots: {e}")
+            
+    def list_pilots(self) -> list[str]:
+        """List all pilot IDs"""
+        try:
+            pilot_keys = self._redis_client.keys("cognicore:data:pilot:*")
+            pilot_ids = []
+            for key in pilot_keys:
+                if isinstance(key, bytes):
+                    pilot_ids.append(key.decode().split(":")[-1])
+                else:
+                    pilot_ids.append(key.split(":")[-1])
+            return pilot_ids
+        except Exception as e:
+            self.logger.error(f"Error listing pilots: {e}")
+            return []
     
     # ==================== STATE-ONLY DISPLAY SYSTEM ====================
     # LCD display controlled only via system state changes - alert_manager handles all display

@@ -7,7 +7,7 @@ Centralized configuration for the CogniFlight Edge system.
 import os
 
 # Project root directory
-PROJECT_ROOT = "/home/jeremia/Desktop/cogniflight-edge"
+PROJECT_ROOT = "/home/jeremia/projects/cogniflight-edge-backup"
 
 
 # Base URLs and endpoints

@@ -1,6 +1,6 @@
 # CogniCore - Thread-Safe Redis Communication Library
 
-CogniCore is a thread-safe Redis communication library designed for mission-critical embedded systems. It provides centralized state management, real-time data sharing, and robust inter-service communication through Redis pub/sub with connection pooling and proper resource management.
+CogniCore is a thread-safe Redis communication library designed for Cogniflight Edge. It provides centralized state management, real-time data sharing, and robust inter-service communication through Redis pub/sub with connection pooling and proper resource management.
 
 ## Core Features
 
@@ -147,8 +147,10 @@ core.subscribe_to_state_changes(callback: Callable[[Dict], None])
 
 ### Pilot Profile Management
 
+CogniCore uses a simplified pilot system with `pilot:{pilot_id}` keys and active flags:
+
 ```python
-# Store pilot profile
+# Store and activate pilot profile
 from CogniCore.state import PilotProfile
 
 profile = PilotProfile(
@@ -168,13 +170,40 @@ profile = PilotProfile(
         "lightSensitivity": "low"
     }
 )
-core.set_pilot_profile(profile)
 
-# Retrieve pilot profiles
-active_pilot = core.get_active_pilot()
-profile = core.get_pilot_profile("1234567")
-all_pilots = core.list_pilots()
+# Store profile and optionally activate (default: activate=True)
+core.set_pilot_profile(profile, activate=True)
+
+# Pilot activation management
+core.set_pilot_active("1234567", active=True)    # Activate pilot
+core.set_pilot_active("1234567", active=False)   # Deactivate pilot
+core.deactivate_all_pilots()                     # Deactivate all (face recognition startup)
+
+# Retrieve pilot information
+active_pilot_id = core.get_active_pilot()        # Get active pilot ID
+profile = core.get_pilot_profile("1234567")      # Get specific pilot profile
+active_profile = core.get_active_pilot_profile() # Get active pilot's full profile
+all_pilot_ids = core.list_pilots()               # List all pilot IDs
+
+# Subscribe to pilot changes for reactive processing
+def on_pilot_change(hash_name, data):
+    pilot_id = data.get('pilot_id') if data else None
+    is_active = data.get('active', False) if data else False
+
+    if pilot_id and is_active:
+        print(f"Pilot {pilot_id} activated")
+    elif pilot_id and not is_active:
+        print(f"Pilot {pilot_id} deactivated")
+
+core.subscribe_to_data("pilot:1234567", on_pilot_change)
 ```
+
+**Key Features:**
+
+- **Single Data Structure**: Uses `pilot:{pilot_id}` keys with active flag - no separate cache needed
+- **Persistent Storage**: Pilot profiles are persistent and survive service restarts
+- **Reactive Updates**: Services subscribe to pilot changes for camera handover
+- **Keyspace Notifications**: Maintains pilot_id in key for proper subscription notifications
 
 ### Utilities
 
@@ -360,4 +389,4 @@ redis-cli CONFIG SET notify-keyspace-events Kh
 
 ---
 
-**Production-ready communication library for mission-critical embedded systems.**
+**Production-ready communication library for our Cogniflight embedded system.**

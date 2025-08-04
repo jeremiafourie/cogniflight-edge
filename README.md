@@ -89,7 +89,7 @@ cogniflight-edge/
 
 ### Offline Operation
 
-- **Local Profile Caching**: Redis-based profile storage
+- **Persistent Profile Storage**: Redis-based profile storage that survives restarts
 - **Embedded Processing**: All computation performed on-device
 - **Network-Optional**: Full functionality without internet connectivity
 
@@ -135,7 +135,7 @@ Each service operates as an independent systemd unit with **event-driven reactiv
 
 - **HTTPS Client**: Sets pilot profile but does NOT automatically set `MONITORING_ACTIVE` state
 - **Predictor Responsibility**: Only the predictor service sets `MONITORING_ACTIVE` based on fatigue analysis
-- **Cache Dependencies**: Services may fail if Redis cache is cleared and server is offline
+- **Profile Dependencies**: Services may fail if pilot profiles are deleted and server is offline
 - **State Transitions**: System stays in `scanning` until predictor determines fatigue state
 
 ### System Services

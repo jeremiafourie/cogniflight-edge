@@ -51,8 +51,8 @@ The `services` directory contains all the microservices that make up the CogniFl
 - **Function**: Real-time data fusion and fatigue stage prediction with pilot-specific thresholds
 - **Input**: Vision data (EAR/MAR), heart rate data (when available), pilot profiles
 - **Output**: Fusion scores, fatigue stage classifications, system state updates
-- **Algorithm**: Vision-weighted fusion (60% blink, 40% yawn) + optional HR (30%) with 3-sample sliding window
-- **Processing**: 10Hz continuous fusion with personalized sensitivity settings
+- **Algorithm**: EAR-based fatigue (50%) + closure duration (30%) + microsleeps (15%) + blink patterns (5%) + optional HR (25%) with 2-sample sliding window
+- **Processing**: 20Hz continuous fusion (0.05s sleep) with personalized sensitivity settings
 
 ### Identification and Profile Services
 
@@ -61,15 +61,15 @@ The `services` directory contains all the microservices that make up the CogniFl
 - **Function**: Pilot identification using facial recognition, camera resource management
 - **Input**: Camera frames (640x360 @ 15fps), pilot face embeddings
 - **Output**: Pilot identification requests, security alerts, camera handoff
-- **Technology**: InsightFace buffalo_s model, adaptive processing (every 15th frame)
+- **Technology**: InsightFace buffalo_s model, processes every 5th frame (3fps processing)
 - **Resource Management**: Releases camera to vision processing when pilot active
 
 #### **HTTPS Client** (`https_client/`) - Reactive Profile Management
 
-- **Function**: Pilot profile fetching with offline caching
+- **Function**: Pilot profile fetching with persistent storage
 - **Input**: Pilot ID requests from face recognition
-- **Output**: Pilot profiles published to CogniCore, cache management
-- **Features**: Cloud API integration with Redis cache fallback, reactive profile loading
+- **Output**: Pilot profiles published to CogniCore, persistent storage
+- **Features**: Cloud API integration with persistent Redis storage, reactive profile loading
 
 ### Monitoring Services
 
@@ -123,11 +123,16 @@ core.subscribe_to_data("vision", on_vision_data)
 
 # Pilot Activation Subscriber (HR Monitor)
 def on_pilot_change(hash_name, data):
-    pilot_id = data.get('pilot_id')
-    if pilot_id and not hr_monitor_running:
+    pilot_id = data.get('pilot_id') if data else None
+    is_active = data.get('active', False) if data else False
+
+    if pilot_id and is_active and not hr_monitor_running:
         start_ble_connection()  # Immediate activation
 
-core.subscribe_to_data("active_pilot", on_pilot_change)
+# Subscribe to all pilot changes
+existing_pilots = core.list_pilots()
+for pilot_id in existing_pilots:
+    core.subscribe_to_data(f"pilot:{pilot_id}", on_pilot_change)
 ```
 
 ### State Management Pattern
@@ -269,7 +274,7 @@ def robust_service_operation():
 
 ### On-Demand Services
 
-- **Face Recognition**: 1fps processing (15fps camera, every 15th frame)
+- **Face Recognition**: 3fps processing (15fps camera, every 5th frame)
 - **HTTPS Client**: Reactive profile fetching on pilot detection
 - **Predictor**: 2-second interval sliding window analysis
 

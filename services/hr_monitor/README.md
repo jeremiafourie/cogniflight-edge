@@ -1,25 +1,23 @@
 # HR Monitor Service
 
-## Overview
-
-The HR Monitor service provides continuous Bluetooth Low Energy (BLE) heart rate monitoring for the CogniFlight Edge system. It connects to a configured heart rate sensor and publishes real-time heart rate data to CogniCore for use by other services in the system.
+The HR Monitor service provides continuous Bluetooth Low Energy (BLE) heart rate monitoring with advanced physiological analysis. It connects to configured heart rate sensors and publishes comprehensive heart rate metrics to CogniCore for system-wide use.
 
 ## Key Features
 
-- **Continuous Operation**: Always attempts to connect and monitor the configured heart rate sensor
-- **Automatic Reconnection**: Handles BLE connection failures gracefully with automatic retry logic
-- **Real-time Publishing**: Immediate heart rate data publication via CogniCore Redis
-- **Standard BLE Protocol**: Compatible with standard BLE heart rate monitors
-- **Robust Error Handling**: Continues operation despite connection issues
+- **Advanced HR Analysis**: Provides HRV metrics, baseline deviation, and stress indexing
+- **Continuous Operation**: Maintains connection with automatic retry on failures
+- **Real-time Publishing**: Streams enhanced heart rate data via CogniCore Redis
+- **Standard BLE Protocol**: Compatible with BLE Heart Rate Profile devices
+- **Systemd Integration**: Proper watchdog handling prevents service timeouts
 
 ## Architecture
 
-The service follows a simple continuous monitoring pattern:
+The service follows a continuous monitoring pattern:
 
 1. Initialize CogniCore connection and logging
 2. Continuously attempt to connect to the configured heart rate sensor
 3. Stream heart rate notifications when connected
-4. Automatically retry on connection failures
+4. Automatically retry on connection failures with exponential backoff
 5. Publish all heart rate data to CogniCore for system-wide availability
 
 ## Hardware Requirements
@@ -38,6 +36,21 @@ The service follows a simple continuous monitoring pattern:
 - Wrist-based HR monitors with BLE support
 - Any device implementing the standard BLE Heart Rate Profile
 
+## Data Processing
+
+### Heart Rate Data Parsing
+
+```python
+def parse_hr_data(data: bytearray) -> int:
+    """Parse heart rate data from BLE heart rate measurement."""
+    flags = data[0]
+    if flags & 0x01:  # 16-bit HR value
+        hr = int.from_bytes(data[1:3], byteorder='little')
+    else:  # 8-bit HR value
+        hr = int(data[1])
+    return max(0, min(255, hr))  # Clamp to valid range
+```
+
 ### Connection Management
 
 - **Connection Attempts**: Continuous retry with 5-second intervals
@@ -49,19 +62,33 @@ The service follows a simple continuous monitoring pattern:
 
 ### CogniCore Publications
 
-The service publishes heart rate data to the `hr_sensor` hash in CogniCore:
+The service publishes enhanced heart rate data to the `hr_sensor` hash in CogniCore:
 
 ```json
 {
   "hr": 72,
-  "t_hr": 1234567890.123
+  "t_hr": 1234567890.123,
+  "rr_interval": 0.85,
+  "baseline_deviation": 0.15,
+  "rmssd": 42.5,
+  "hr_trend": 1.2,
+  "stress_index": 0.25,
+  "baseline_hr": 72,
+  "baseline_hrv": 45
 }
 ```
 
 **Fields:**
 
-- `hr`: Heart rate in beats per minute (BPM) - clamped to 0-255 range
-- `t_hr`: Unix timestamp of measurement acquisition
+- `hr`: Heart rate in beats per minute (BPM, 0-255)
+- `t_hr`: Unix timestamp of measurement
+- `rr_interval`: RR interval in seconds for HRV analysis (optional)
+- `baseline_deviation`: HR deviation from baseline (0-1)
+- `rmssd`: Root Mean Square of Successive Differences in ms
+- `hr_trend`: Heart rate trend in BPM per minute
+- `stress_index`: Calculated stress level (0-1)
+- `baseline_hr`: Individual baseline heart rate
+- `baseline_hrv`: Individual baseline HRV
 
 ## Configuration
 
@@ -159,10 +186,12 @@ The service uses CogniCore for:
 
 ### Downstream Services
 
-- **Inference Service**: Consumes HR data for physiological state analysis
-- **Network Connector**: Transmits HR data in telemetry streams
-- **Alert Manager**: May use HR data for alerting conditions
-- **Any Service**: HR data available system-wide via CogniCore
+Services can consume HR data via CogniCore Redis:
+
+- Physiological monitoring systems
+- Telemetry and data logging
+- Health alerting systems
+- Any service requiring heart rate metrics
 
 ## Troubleshooting
 

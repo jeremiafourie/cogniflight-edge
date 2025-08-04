@@ -1,6 +1,10 @@
 # BLE service requirements
-bleak>=0.20.0
+bleak
 asyncio-mqtt
 
 # For CogniCore communication
 redis
+systemd-python
+
+# For advanced HR analysis
+numpy

@@ -1,33 +1,29 @@
-# /home/jeremia/Desktop/cogniflight-edge/services/face_recognition/face_recognition.service
-
 [Unit]
 Description=CogniFlight Face Recognition Service
-After=network.target alert-manager.service
+After=network.target
 Wants=network.target
-Requires=alert_manager.service
 
 [Service]
-Type=simple
+Type=notify
 User=jeremia
 Group=jeremia
-WorkingDirectory=/home/jeremia/Desktop/cogniflight-edge/services/face_recognition
-Environment=PATH=/home/jeremia/Desktop/cogniflight-edge/services/face_recognition/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=HEARTBEAT_DIR=/run/cogniflight
-ExecStart=/home/jeremia/Desktop/cogniflight-edge/services/face_recognition/.venv/bin/python main.py
-Restart=always
-RestartSec=10
+WorkingDirectory=/home/jeremia/projects/cogniflight-edge-backup/services/face_recognition
+Environment=PATH=/home/jeremia/projects/cogniflight-edge-backup/services/face_recognition/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/home/jeremia/projects/cogniflight-edge-backup
+ExecStart=/home/jeremia/projects/cogniflight-edge-backup/services/face_recognition/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StartLimitBurst=3
+StartLimitIntervalSec=60
 StandardOutput=journal
 StandardError=journal
 
-# Runtime directory for heartbeat files
-RuntimeDirectory=cogniflight
-RuntimeDirectoryMode=0755
-
-# Resource limits - Optimized for RPi5 16GB
-MemoryMax=3G
-CPUQuota=50%
-CPUWeight=600
-Nice=5
+# Resource limits - Optimized for RPi5 16GB (AI inference workload)
+MemoryMax=4G
+CPUQuota=75%
+CPUWeight=800
+Nice=0
 
 # Security settings
 NoNewPrivileges=true

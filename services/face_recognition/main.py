@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import subprocess
 from pathlib import Path
+import systemd.daemon
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -20,7 +21,6 @@ except ImportError as e:
     sys.exit(1)
 
 # Configuration constants
-HEARTBEAT_DIR = config.HEARTBEAT_DIR
 
 # Import InsightFace after system setup
 try:
@@ -101,7 +101,7 @@ class PilotDetectionCamera:
             try:
                 chunk = self.process.stdout.read(4096)
                 if not chunk:
-                    time.sleep(0.01)
+                    time.sleep(0.005)  # Reduced from 10ms to 5ms
                     continue
                 
                 buffer += chunk
@@ -124,7 +124,7 @@ class PilotDetectionCamera:
                         
             except Exception as e:
                 if self.running:
-                    time.sleep(0.01)
+                    time.sleep(0.005)  # Reduced from 10ms to 5ms
     
     def read(self):
         with self.frame_lock:
@@ -146,19 +146,6 @@ class PilotDetectionCamera:
                 self.process.kill()
             self.process = None
 
-def write_service_heartbeat(core, logger):
-    """Write pilot identification service heartbeat for watchdog monitoring"""
-    global last_heartbeat
-    current_time = time.time()
-    
-    if current_time - last_heartbeat >= HEARTBEAT_INTERVAL:
-        try:
-            core.write_heartbeat()
-            last_heartbeat = current_time
-            logger.debug(f"Heartbeat written: {current_time}")
-            
-        except Exception as e:
-            logger.error(f"Failed to write heartbeat: {e}")
 
 def load_pilot_face_embeddings_from_redis(core, logger):
     """Load known pilot face embeddings from CogniCore Redis"""
@@ -285,19 +272,30 @@ def on_pilot_request_cleared(hash_name, data):
     if data is None:  # Request was cleared/deleted
         pilot_request_pending = False
 
-def on_active_pilot_change(hash_name, data):
-    """Callback when active pilot changes"""
+def on_pilot_change(hash_name, data):
+    """Callback when pilot data changes"""
     global active_pilot_detected, camera_released
     pilot_id = data.get('pilot_id') if data else None
+    is_active = data.get('active', False) if data else False
     
-    if pilot_id and not active_pilot_detected:
-        # New pilot detected - trigger camera release
+    if pilot_id and is_active and not active_pilot_detected:
+        # Pilot activated - trigger camera release
         active_pilot_detected = True
         camera_released = False
-    elif not pilot_id and active_pilot_detected:
-        # Pilot cleared - reset state for next detection
+        # Note: logger not available in callback, will be logged in main loop
+    elif pilot_id and not is_active and active_pilot_detected:
+        # Pilot deactivated - reset state for next detection
         active_pilot_detected = False
         camera_released = False
+        # Note: logger not available in callback, will be logged in main loop
+
+def setup_pilot_subscription(core, pilot_id, logger):
+    """Setup subscription for a new pilot"""
+    try:
+        core.subscribe_to_data(f"pilot:{pilot_id}", on_pilot_change)
+        logger.info(f"Subscribed to pilot:{pilot_id} changes")
+    except Exception as e:
+        logger.warning(f"Failed to subscribe to pilot {pilot_id}: {e}")
 
 def main():
     """Main face recognition service loop"""
@@ -315,22 +313,30 @@ def main():
         # Subscribe to pilot_id_request to monitor when it gets cleared
         core.subscribe_to_data("pilot_id_request", on_pilot_request_cleared)
         
-        # Subscribe to active pilot changes for better handover management
-        core.subscribe_to_data("active_pilot", on_active_pilot_change)
+        # Subscribe to pilot changes for camera handover management  
+        # Subscribe to any pilot:{pilot_id} changes to detect when pilots become active
+        # Note: We'll set up dynamic subscriptions when we detect pilots
         
-        # Clear active pilot on face recognition startup for proper camera handover
+        # Deactivate all pilots on face recognition startup for proper camera handover
         try:
-            core.clear_active_pilot()
-            logger.info("Cleared active pilot on face recognition startup")
+            core.deactivate_all_pilots()
+            logger.info("Deactivated all pilots on face recognition startup")
         except Exception as e:
-            logger.debug(f"Failed to clear active pilot on startup: {e}")
+            logger.debug(f"Failed to deactivate pilots on startup: {e}")
+            
+        # Subscribe to existing pilots for activation detection
+        existing_pilots = core.list_pilots()
+        logger.info(f"Found {len(existing_pilots)} existing pilots: {existing_pilots}")
+        for pilot_id in existing_pilots:
+            try:
+                core.subscribe_to_data(f"pilot:{pilot_id}", on_pilot_change)
+                logger.debug(f"Subscribed to pilot:{pilot_id} changes")
+            except Exception as e:
+                logger.warning(f"Failed to subscribe to pilot {pilot_id}: {e}")
         
         logger.info("Face Recognition service starting...")
         logger.info(f"Recognition threshold: {RECOGNITION_THRESHOLD}")
         logger.info(f"Face detection threshold: {FACE_DETECTION_THRESHOLD}")
-        
-        # Write initial heartbeat
-        write_service_heartbeat(core, logger)
         
         # Service starting up
         logger.info("Face recognition service initializing...")
@@ -351,14 +357,25 @@ def main():
         last_pilot_embeddings_refresh = time.time()
         PILOT_EMBEDDINGS_REFRESH_INTERVAL = 60 # 60 seconds - check frequently for new embeddings
         
-        # Initialize pilot face recognition analyzer
+        # Initialize pilot face recognition analyzer (this may download models)
         try:
+            logger.info("Initializing face analysis model - this may take up to 60 seconds for first download...")
             pilot_face_analyzer = FaceAnalysis(name=FACE_MODEL_NAME, providers=["CPUExecutionProvider"])
+            
+            # Send watchdog notifications during model preparation to prevent timeout
+            logger.info("Preparing face analysis model...")
+            systemd.daemon.notify('WATCHDOG=1')
             pilot_face_analyzer.prepare(ctx_id=0, det_size=(640, 640))
+            systemd.daemon.notify('WATCHDOG=1')
+            
             logger.info("Pilot face analyzer initialized successfully")
         except Exception as e:
             logger.error(f"Failed to initialize FaceAnalysis: {e}")
             return
+        
+        # Notify systemd that service is ready (after model initialization)
+        systemd.daemon.notify('READY=1')
+        logger.info("Notified systemd that service is ready")
         
         # Setup camera
         camera = PilotDetectionCamera(logger, width=CAMERA_WIDTH, height=CAMERA_HEIGHT, fps=CAMERA_FPS)
@@ -417,7 +434,7 @@ def main():
                 # Wait for pilot to be cleared before restarting
                 logger.info("Waiting for pilot to be cleared...")
                 while active_pilot_detected:
-                    write_service_heartbeat(core, logger)
+                    systemd.daemon.notify('WATCHDOG=1')
                     time.sleep(5)
                 
                 logger.info("Pilot cleared - restarting face recognition")
@@ -461,7 +478,7 @@ def main():
                 
             ret, frame = camera.read()
             if not ret or frame is None:
-                time.sleep(0.1)
+                time.sleep(0.01)  # Reduced from 100ms to 10ms for faster recovery
                 continue
             
             camera_frames_processed += 1
@@ -469,20 +486,20 @@ def main():
             # Write heartbeat and status update every 30 seconds
             current_time = time.time()
             
-            # Write heartbeat regularly
-            write_service_heartbeat(core, logger)
+            # Send watchdog notification
+            systemd.daemon.notify('WATCHDOG=1')
             
             if current_time - last_status_log > 30:
                 camera_frames = camera.get_frame_count()
                 logger.info(f"Status: Camera frames: {camera_frames}, Processed: {camera_frames_processed}")
                 last_status_log = current_time
             
-            # Process every 15th frame
-            if camera_frames_processed % 15 == 0:
+            # Process every 5th frame for faster response (3fps processing = 333ms max delay)
+            if camera_frames_processed % 5 == 0:
                 pilot_faces_processed += 1
                 pilot_id, face_detected, confidence = identify_pilot_from_frame(frame, pilot_face_analyzer, pilot_embeddings, RECOGNITION_THRESHOLD, FACE_DETECTION_THRESHOLD, logger)
                 
-                # Show processing indicator every 20 face checks (300 frames) - less frequent
+                # Show processing indicator every 20 face checks (100 frames) - less frequent
                 if pilot_faces_processed % 20 == 0:
                     logger.debug(f"Pilot detection indicator: {pilot_faces_processed} faces analyzed")
                 
@@ -496,8 +513,8 @@ def main():
                         last_pilot_feedback_time = time.time()
                     unknown_pilot_detection_start = None
                     
-                    # Periodic "still searching" feedback - less frequent
-                    if time.time() - last_pilot_feedback_time > 15:
+                    # Periodic "still searching" feedback (reduced from 15s to 10s)
+                    if time.time() - last_pilot_feedback_time > 10:
                         core.set_system_state(SystemState.SCANNING, "Scanning...\nCabin Empty")
                         last_pilot_feedback_time = time.time()
                     
@@ -505,8 +522,8 @@ def main():
                     # Known face recognized
                     logger.info(f"Pilot identified: {pilot_id} (confidence: {confidence:.3f})")
                     
-                    # Check if a request is already pending or recently sent
-                    if not pilot_request_pending and not check_pending_pilot_identification_request(core, logger):
+                    # Check if a request is already pending (prioritize local state for speed)
+                    if not pilot_request_pending:
                         # Set welcome status message
                         core.set_system_state(SystemState.SCANNING, f"Welcome {pilot_id}\nFetching profile")
                         
@@ -522,6 +539,9 @@ def main():
                             
                             core.publish_data("pilot_id_request", request_data)
                             logger.info("Profile request sent to HTTPS client via CogniCore")
+                            
+                            # Set up subscription for this pilot if not already subscribed
+                            setup_pilot_subscription(core, pilot_id, logger)
                             
                             # Mark request as pending
                             pilot_request_pending = True
@@ -549,8 +569,8 @@ def main():
                         logger.warning(f"Unknown face detected - security alert (confidence: {confidence:.3f})")
                         # Set intruder alert status message
                         core.set_system_state(SystemState.INTRUDER_DETECTED, "WARNING\nIntruder Alert")
-                    elif time.time() - unknown_pilot_detection_start > 10:
-                        # Show face detected feedback only occasionally to avoid spam
+                    elif time.time() - unknown_pilot_detection_start > 3:
+                        # Show face detected feedback more frequently for security (reduced from 10s to 3s)
                         core.set_system_state(SystemState.INTRUDER_DETECTED, "WARNING\nIntruder Alert")
                         unknown_pilot_detection_start = time.time()
                         

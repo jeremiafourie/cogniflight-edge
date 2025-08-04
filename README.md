@@ -43,11 +43,28 @@ The system operates through well-defined states managed by CogniCore:
 
 ## Fatigue Detection Algorithm
 
-### Vision Processing
+### Multi-Modal Sensor Fusion
 
-- **Eye Aspect Ratio (EAR)**: Calculated from 6 eye landmarks per eye
-- **Mouth Aspect Ratio (MAR)**: Calculated from 6 mouth landmarks
-- **Real-time Analysis**: 30fps camera processing with MediaPipe
+The system combines data from multiple sensors for comprehensive fatigue assessment:
+
+#### Vision Processing (75% weight)
+
+- **Eye Aspect Ratio (EAR)**: Primary fatigue indicator (50% weight)
+- **Eye Closure Duration**: Safety-critical microsleep detection (30% weight)
+- **Microsleep Events**: Count of 1+ second eye closures (15% weight)
+- **Blink Patterns**: Behavioral analysis of blink rate (5% weight)
+
+#### Physiological Monitoring (25% weight)
+
+- **Heart Rate Variability (RMSSD)**: Autonomic nervous system health indicator
+- **Heart Rate Baseline Deviation**: Stress response monitoring
+- **HR Trend Analysis**: Rate of change detection for stress events
+- **Stress Index**: Combined HR elevation and HRV reduction
+
+#### Environmental Factors
+
+- **Temperature**: >25°C increases fatigue risk
+- **Humidity**: >70% or <30% affects comfort and alertness
 
 ### Fatigue Classification
 
@@ -56,7 +73,7 @@ The system operates through well-defined states managed by CogniCore:
 - **Moderate** (0.6-0.8): Significant fatigue detected
 - **Severe** (> 0.8): Critical fatigue requiring immediate attention
 
-Thresholds are personalized based on pilot alert sensitivity preferences.
+All thresholds are personalized based on individual pilot baselines and preferences.
 
 ## Directory Structure
 
@@ -78,10 +95,19 @@ cogniflight-edge/
 
 ## Key Features
 
+### Advanced Sensor Integration
+
+- **16 Sensor Data Fields**: Comprehensive monitoring across physiological, environmental, and behavioral metrics
+- **Real-time HR Monitoring**: BLE heart rate sensor with HRV analysis and stress detection
+- **Environmental Monitoring**: Temperature and humidity sensing with comfort analysis
+- **Computer Vision**: 468-point facial landmark detection with microsleep monitoring
+- **Biometric Security**: Face recognition with pilot identification and intrusion detection
+
 ### Real-time Reactive Processing
 
 - **30fps Vision Processing**: MediaPipe-based facial landmark detection (only when pilot active)
 - **Event-Driven Fusion**: Immediate processing on vision/HR data changes
+- **Multi-Modal Data Fusion**: Weighted combination of vision (75%) and physiological (25%) data
 - **Instant Alerts**: Sub-second response via Redis keyspace notifications
 - **Zero-Latency Activation**: Services respond to pilot changes within milliseconds
 - **Robust Error Recovery**: Watchdog mechanisms prevent silent service failures

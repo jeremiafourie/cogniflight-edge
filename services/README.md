@@ -81,13 +81,13 @@ The `services` directory contains all the microservices that make up the CogniFl
 - **Technology**: Bleak async BLE library with reactive connection management
 - **Reactive Design**: BLE connection only established when pilot detected, automatic cleanup
 
-#### **Environment Monitor** (`env_monitor/`) - Continuous Environmental Monitoring
+#### **Environment Monitor** (`env_monitor/`) - Guaranteed Environmental Monitoring
 
-- **Function**: Environmental sensor data collection (independent of pilot presence)
-- **Input**: DHT22 temperature and humidity sensor
-- **Output**: Environmental telemetry data via CogniCore
-- **Hardware**: DHT22 on GPIO pin 4 with 1Hz sampling
-- **Design**: Continuous operation for environmental context
+- **Function**: Robust environmental sensor data collection with guaranteed data publishing
+- **Input**: DHT22 temperature and humidity sensor with 15-attempt retry logic
+- **Output**: Environmental telemetry data via CogniCore every 2 seconds (always)
+- **Hardware**: DHT22 on GPIO pin 4 with 0.5Hz sampling (2-second intervals)
+- **Design**: Continuous operation with stale data fallback for 100% data availability
 
 ### Data Management Services
 

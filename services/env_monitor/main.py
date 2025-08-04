@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 import board
 import adafruit_dht
+import systemd.daemon
 
 # Add project root to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -50,6 +51,10 @@ def main():
         core = CogniCore(SERVICE_NAME)
         logger = core.get_logger(SERVICE_NAME)
         logger.info("Environmental monitoring service started")
+        
+        # Notify systemd that service is ready
+        systemd.daemon.notify('READY=1')
+        logger.info("Notified systemd that service is ready")
     except Exception as e:
         print(f"Failed to connect to CogniCore: {e}")
         return
@@ -70,12 +75,8 @@ def main():
             else:
                 logger.warning("Failed to read DHT22 sensor")
 
-            # Write heartbeat
-            try:
-                core.write_heartbeat()
-                logger.debug("Heartbeat written")
-            except Exception as e:
-                logger.warning(f"Heartbeat write failed: {e}")
+            # Send systemd watchdog keepalive
+            systemd.daemon.notify('WATCHDOG=1')
                 
             time.sleep(POLL_INTERVAL)
 

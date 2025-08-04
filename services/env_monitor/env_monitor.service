@@ -4,26 +4,27 @@ After=network.target
 Wants=network.target
 
 [Service]
-Type=simple
+Type=notify
 User=jeremia
 Group=jeremia
-WorkingDirectory=/home/jeremia/Desktop/cogniflight-edge/services/env_monitor
-Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-Environment=PYTHONPATH=/home/jeremia/Desktop/cogniflight-edge
-Environment=HEARTBEAT_DIR=/run/cogniflight
-ExecStart=/home/jeremia/Desktop/cogniflight-edge/services/env_monitor/venv/bin/python main.py
-Restart=always
+WorkingDirectory=/home/jeremia/projects/cogniflight-edge-backup/services/env_monitor
+Environment=PATH=/home/jeremia/projects/cogniflight-edge-backup/services/env_monitor/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/home/jeremia/projects/cogniflight-edge-backup
+ExecStart=/home/jeremia/projects/cogniflight-edge-backup/services/env_monitor/.venv/bin/python main.py
+Restart=on-failure
+WatchdogSec=30
+StartLimitBurst=3
+StartLimitIntervalSec=60
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 
-# Runtime directory for heartbeat files
-RuntimeDirectory=cogniflight
-RuntimeDirectoryMode=0755
 
-# Resource limits
-MemoryMax=256M
-CPUQuota=20%
+# Resource limits - Optimized for RPi5 16GB (Environmental sensors)
+MemoryMax=512M
+CPUQuota=25%
+CPUWeight=200
+Nice=15
 
 # Security settings
 NoNewPrivileges=true

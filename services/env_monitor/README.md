@@ -1,13 +1,11 @@
 # Environmental Monitor Service
 
-## Overview
-
 The Environmental Monitor service continuously monitors cabin environmental conditions using DHT22 sensors. It provides temperature and humidity data for comprehensive situational awareness and potential correlation with pilot fatigue indicators.
 
 ## Key Features
 
 - **DHT22 Sensor Integration**: High-precision temperature and humidity monitoring
-- **Continuous Monitoring**: 1Hz sampling rate for real-time environmental data
+- **Continuous Monitoring**: 0.5Hz sampling rate (2-second intervals) for real-time environmental data
 - **Data Validation**: Quality checks and range validation for sensor readings
 - **CogniCore Integration**: Real-time data publishing via Redis
 - **Robust Error Handling**: Graceful sensor failure recovery
@@ -24,8 +22,66 @@ The Environmental Monitor service continuously monitors cabin environmental cond
 ### Configuration
 
 - **GPIO Pin**: BCM Pin 4 (configurable)
-- **Poll Interval**: 1.0 seconds
+- **Poll Interval**: 2.0 seconds
 - **Retry Logic**: Built-in sensor retry mechanism
+
+## Processing
+
+### 1. Sensor Data Acquisition
+
+```python
+def read_sensor_data(logger):
+    """Read temperature and humidity from DHT sensor."""
+    try:
+        humidity = dht_device.humidity
+        temperature = dht_device.temperature
+
+        if humidity is not None and temperature is not None:
+            return {
+                "temp": round(temperature, 1),
+                "humidity": round(humidity, 1),
+                "t_sensor": time.time()
+            }
+        return None
+    except RuntimeError as error:
+        # DHT sensor timeout or checksum error - these are normal occasionally
+        logger.debug(f"DHT sensor read error (will retry): {error.args[0]}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected sensor read error: {e}")
+        return None
+```
+
+### 2. Continuous Monitoring Loop
+
+```python
+def main():
+    """Main environmental monitoring service loop."""
+    while True:
+        # Read sensor data
+        sensor_data = read_sensor_data(logger)
+
+        if sensor_data:
+            try:
+                # Publish sensor data to CogniCore
+                core.publish_data("env_sensor", sensor_data)
+                logger.info(f"DHT22 reading: {sensor_data['temp']}°C, {sensor_data['humidity']}%")
+            except Exception as e:
+                logger.error(f"Failed to publish sensor data: {e}")
+        else:
+            logger.warning("Failed to read DHT22 sensor")
+
+        # Send systemd watchdog keepalive
+        systemd.daemon.notify('WATCHDOG=1')
+
+        time.sleep(POLL_INTERVAL)
+```
+
+### 3. Data Validation
+
+- **Range Checking**: Temperature and humidity within sensor specifications
+- **Null Value Handling**: Skip publishing if sensor returns invalid readings
+- **Precision Rounding**: Round to 1 decimal place for consistency
 
 ## Outputs
 
@@ -98,7 +154,7 @@ RETRY_ATTEMPTS = 3               # Built into Adafruit_DHT.read_retry()
 
 ## Performance
 
-- **Sampling Rate**: 1 Hz (every second)
+- **Sampling Rate**: 0.5 Hz (every 2 seconds)
 - **Response Time**: ~2 seconds for sensor stabilization
 - **CPU Usage**: <1% on Raspberry Pi 4
 - **Memory Usage**: ~5MB minimal footprint
@@ -161,7 +217,7 @@ The service runs as a systemd unit with continuous monitoring:
 1. **Startup**: Initialize CogniCore connection and DHT sensor interface
 2. **Monitor**: Continuously read temperature and humidity every second
 3. **Publish**: Send sensor data to CogniCore for system integration
-4. **Heartbeat**: Maintain watchdog heartbeat for service monitoring
+4. **Systemd Watchdog**: Send keepalive signals to systemd for service monitoring
 
 ## Integration Flow
 
@@ -222,8 +278,8 @@ Comprehensive logging includes:
 env_monitor/
 ├── main.py           # Main service implementation
 ├── README.md         # This documentation
-├── requirements.txt   # External dependencies
-└── env_monitor.service         # Service configuration file
+├── Adafruit_DHT.py   # Local DHT library fallback (if needed)
+└── systemd/          # Service configuration files
 ```
 
 ## Integration

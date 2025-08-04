@@ -1,27 +1,33 @@
 [Unit]
-Description=https_client service
+Description=CogniFlight HTTPS Client Service
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
 User=jeremia
 Group=jeremia
-Environment=HEARTBEAT_DIR=/run/cogniflight
-WorkingDirectory=/home/jeremia/Desktop/cogniflight-edge/services/https_client
-ExecStart=/usr/bin/python3 main.py
+WorkingDirectory=/home/jeremia/projects/cogniflight-edge-backup/services/https_client
+Environment=PATH=/home/jeremia/projects/cogniflight-edge-backup/services/https_client/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/home/jeremia/projects/cogniflight-edge-backup
+ExecStart=/home/jeremia/projects/cogniflight-edge-backup/services/https_client/.venv/bin/python main.py
 Restart=on-failure
-RestartSec=2
+WatchdogSec=30
+StartLimitBurst=3
+StartLimitIntervalSec=60
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
 
-# Runtime directory for heartbeat files
-RuntimeDirectory=cogniflight
-RuntimeDirectoryMode=0755
+# Resource limits - Optimized for RPi5 16GB (HTTP client)
+MemoryMax=512M
+CPUQuota=30%
+CPUWeight=250
+Nice=10
 
-# Resource limits - Optimized for RPi5 16GB
-MemoryMax=128M
-CPUQuota=15%
-CPUWeight=50
-Nice=15
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=false
 
 [Install]
 WantedBy=multi-user.target

@@ -1,6 +1,8 @@
 # HTTPS client requirements
-requests>=2.28.0
-urllib3>=1.26.0
+requests
+urllib3
+numpy
 
 # For CogniCore communication
 redis
+systemd-python

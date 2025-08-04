@@ -355,10 +355,10 @@ if __name__ == "__main__":
 
 ## Requirements
 
-- **Python 3.8+**
-- **Redis Server 4.0+** with keyspace notifications enabled
-- **redis-py >= 4.0.0**
-- **systemd-python >= 235** for service integration
+- **Python**
+- **Redis Server** with keyspace notifications enabled
+- **redis-py**
+- **systemd-python** for service integration
 
 ### Redis Configuration
 

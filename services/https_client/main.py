@@ -9,6 +9,7 @@ import logging
 import pickle
 import numpy as np
 from pathlib import Path
+import systemd.daemon
 
 # Add parent directories to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
@@ -39,18 +40,6 @@ HEARTBEAT_INTERVAL = 5
 # Global heartbeat tracking
 last_heartbeat = 0
 
-def write_heartbeat(core, logger):
-    """Write heartbeat file for watchdog monitoring"""
-    global last_heartbeat
-    current_time = time.time()
-    
-    if current_time - last_heartbeat >= HEARTBEAT_INTERVAL:
-        try:
-            core.write_heartbeat()
-            last_heartbeat = current_time
-            logger.debug(f"Heartbeat written: {current_time}")
-        except Exception as e:
-            logger.error(f"Failed to write heartbeat: {e}")
 
 def save_pilot_profile_cache(core, pilot_id, profile_data, confidence, logger):
     """Save pilot profile cache data to Redis"""
@@ -63,8 +52,8 @@ def save_pilot_profile_cache(core, pilot_id, profile_data, confidence, logger):
             "cached_from_server": True
         }
         
-        # Use CogniCore's publish_data method (auto-persistent for pilot_cache)
-        core.publish_data(f'pilot_cache:{pilot_id}', cache_data)
+        # Note: Pilot profiles are now stored persistently via set_pilot_profile()
+        # No separate cache needed - pilot profiles serve as their own cache
         logger.info(f"Pilot profile cached: {pilot_id}")
         return True
         
@@ -73,14 +62,15 @@ def save_pilot_profile_cache(core, pilot_id, profile_data, confidence, logger):
         return False
 
 def save_pilot_profile_to_cognicore(core, pilot_id, profile_data, confidence, logger):
-    """Save pilot profile to CogniCore"""
+    """Save pilot profile to CogniCore and activate"""
     try:
-        # Create and store PilotProfile
+        # Create and store PilotProfile with activation
         pilot_profile = create_pilot_profile_from_data(profile_data)
         if not pilot_profile:
             return False
         
-        core.set_pilot_profile(pilot_profile)
+        # Set profile and activate (active=True by default)
+        core.set_pilot_profile(pilot_profile, activate=True)
         core.set_system_state(
             SystemState.SCANNING,
             f"Welcome {pilot_id}\nProfile loaded",
@@ -162,15 +152,24 @@ def create_pilot_profile_from_data(pilot_data):
         return None
 
 def get_pilot_profile_from_cache(core, pilot_id, logger):
-    """Get pilot profile from Redis cache"""
+    """Get pilot profile from persistent storage (no separate cache needed)"""
     try:
-        cache_data = core.get_data(f'pilot_cache:{pilot_id}')
-        if cache_data:
-            logger.info(f"Found cached profile for {pilot_id}")
-            return (cache_data['pilot_id'], cache_data['profile_data'])
+        # Check if pilot profile already exists (persistent storage)
+        existing_pilot = core.get_pilot_profile(pilot_id)
+        if existing_pilot:
+            logger.info(f"Found existing pilot profile for {pilot_id}")
+            # Convert PilotProfile back to dict format for compatibility
+            profile_data = {
+                'id': existing_pilot.id,
+                'name': existing_pilot.name,
+                'flightHours': existing_pilot.flightHours,
+                'baseline': existing_pilot.baseline,
+                'environmentPreferences': existing_pilot.environmentPreferences
+            }
+            return (pilot_id, profile_data)
         return None
     except Exception as e:
-        logger.error(f"Error retrieving cached profile: {e}")
+        logger.error(f"Error retrieving pilot profile: {e}")
         return None
 
 def load_pilot_embeddings_from_file(logger):
@@ -347,6 +346,10 @@ class HTTPSClientService:
             raise Exception("Redis connection failed")
         self.logger.info("Redis storage initialized")
         
+        # Notify systemd that service is ready
+        systemd.daemon.notify('READY=1')
+        self.logger.info("Notified systemd that service is ready")
+        
         # Sync embeddings on startup
         threading.Thread(target=sync_pilot_embeddings_on_startup, args=(self.core,), daemon=True).start()
         
@@ -367,32 +370,56 @@ class HTTPSClientService:
             profile_data = fetch_pilot_profile(self.core, pilot_id)
             
             if profile_data:
+                # Server fetch successful - overwrite existing pilot data
                 self.logger.info(f"Fetched online profile for {pilot_id}")
                 save_pilot_profile_cache(self.core, pilot_id, profile_data, confidence, self.logger)
-            else:
-                # Try cache
-                self.logger.info(f"Server offline - checking cache for {pilot_id}")
-                cached_result = get_pilot_profile_from_cache(self.core, pilot_id, self.logger)
                 
-                if cached_result:
-                    _, profile_data = cached_result
-                    self.logger.info(f"Using cached profile for {pilot_id}")
+                # Save profile to CogniCore and activate
+                if save_pilot_profile_to_cognicore(self.core, pilot_id, profile_data, confidence, self.logger):
+                    self.logger.info(f"Profile updated and activated for {pilot_id}")
                 else:
-                    # No profile found
-                    self.logger.error(f"Profile not found for {pilot_id}")
-                    self.core.set_system_state(
-                        SystemState.SCANNING,
-                        "Pilot not found\nScanning...",
-                        data={"error": "profile_not_found", "failed_pilot_id": pilot_id}
-                    )
-                    self._clear_pilot_id_request()
-                    return
-            
-            # Save profile to CogniCore
-            if save_pilot_profile_to_cognicore(self.core, pilot_id, profile_data, confidence, self.logger):
-                self.logger.info(f"Profile activated for {pilot_id}")
+                    self.logger.error(f"Failed to activate updated profile for {pilot_id}")
             else:
-                self.logger.error(f"Failed to activate profile for {pilot_id}")
+                # Server offline - check if pilot already exists
+                self.logger.info(f"Server offline - checking for existing pilot {pilot_id}")
+                existing_pilot = self.core.get_pilot_profile(pilot_id)
+                
+                if existing_pilot:
+                    # Pilot exists - just activate
+                    self.logger.info(f"Found existing pilot {pilot_id} - activating")
+                    if self.core.set_pilot_active(pilot_id, active=True):
+                        self.logger.info(f"Existing pilot {pilot_id} activated")
+                        self.core.set_system_state(
+                            SystemState.SCANNING,
+                            f"Welcome {pilot_id}\nProfile active",
+                            pilot_id=pilot_id,
+                            data={"profile_loaded": True}
+                        )
+                    else:
+                        self.logger.error(f"Failed to activate existing pilot {pilot_id}")
+                else:
+                    # Try cache as last resort
+                    cached_result = get_pilot_profile_from_cache(self.core, pilot_id, self.logger)
+                    
+                    if cached_result:
+                        _, profile_data = cached_result
+                        self.logger.info(f"Using cached profile for {pilot_id}")
+                        
+                        # Save cached profile to CogniCore and activate
+                        if save_pilot_profile_to_cognicore(self.core, pilot_id, profile_data, confidence, self.logger):
+                            self.logger.info(f"Cached profile activated for {pilot_id}")
+                        else:
+                            self.logger.error(f"Failed to activate cached profile for {pilot_id}")
+                    else:
+                        # No profile found anywhere
+                        self.logger.error(f"Profile not found for {pilot_id}")
+                        self.core.set_system_state(
+                            SystemState.SCANNING,
+                            "Pilot not found\nScanning...",
+                            data={"error": "profile_not_found", "failed_pilot_id": pilot_id}
+                        )
+                        self._clear_pilot_id_request()
+                        return
             
             self._clear_pilot_id_request()
             
@@ -413,7 +440,7 @@ class HTTPSClientService:
         self.logger.info("HTTPS Client service started with CogniCore")
         try:
             while True:
-                write_heartbeat(self.core, self.logger)
+                systemd.daemon.notify('WATCHDOG=1')
                 time.sleep(5)
         except KeyboardInterrupt:
             self.logger.info("HTTPS Client service stopping...")

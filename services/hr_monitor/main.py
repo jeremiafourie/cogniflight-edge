@@ -3,6 +3,7 @@ import sys
 import logging
 import asyncio
 import numpy as np
+import subprocess
 from pathlib import Path
 from collections import deque
 from typing import List, Optional
@@ -11,7 +12,7 @@ import systemd.daemon
 # Add project root to path for imports
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from bleak import BleakClient
+from bleak import BleakClient, BleakScanner
 from CogniCore import CogniCore
 from CogniCore import config
 
@@ -204,16 +205,8 @@ def create_notification_handler(core, logger, analyzer):
                     # Publish enhanced HR data to CogniCore
                     core.publish_data("hr_sensor", hr_data)
                     
-                    # Log with key metrics
-                    log_parts = [f"HR: {hr} BPM"]
-                    if metrics['baseline_deviation'] > 0.1:
-                        log_parts.append(f"Dev: {metrics['baseline_deviation']:.2f}")
-                    if metrics['rmssd']:
-                        log_parts.append(f"RMSSD: {metrics['rmssd']:.1f}ms")
-                    if metrics['stress_index'] > 0.2:
-                        log_parts.append(f"Stress: {metrics['stress_index']:.2f}")
-                    
-                    logger.info(" | ".join(log_parts))
+                    # Log all HR metrics
+                    logger.info(f"HR: {hr} BPM | RR: {rr_interval:.3f}s | Dev: {metrics['baseline_deviation']:.3f} | RMSSD: {metrics['rmssd']:.1f}ms | Trend: {metrics['hr_trend']:.2f} BPM/min | Stress: {metrics['stress_index']:.3f} | Baseline HR: {metrics['baseline_hr']} | Baseline HRV: {metrics['baseline_hrv']}")
                     logger.debug(f"Published enhanced HR data: {hr_data}")
                 except Exception as e:
                     logger.error(f"Failed to publish HR data: {e}")
@@ -223,6 +216,18 @@ def create_notification_handler(core, logger, analyzer):
             logger.error(f"Error handling HR notification: {e}")
     
     return notification_handler
+
+def disconnect_system_bluetooth(mac_address: str, logger):
+    """Simple disconnect from system Bluetooth."""
+    try:
+        result = subprocess.run(['bluetoothctl', 'disconnect', mac_address], 
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            logger.info(f"Disconnected {mac_address} from system")
+        return result.returncode == 0
+    except Exception as e:
+        logger.warning(f"Could not disconnect {mac_address}: {e}")
+        return False
 
 async def connect_and_monitor():
     """Connect to HR sensor and monitor continuously."""
@@ -242,6 +247,10 @@ async def connect_and_monitor():
     
     while True:
         try:
+            # Disconnect from system first
+            disconnect_system_bluetooth(HR_SENSOR_MAC, logger)
+            await asyncio.sleep(2)  # Wait for disconnect
+            
             logger.info(f"Attempting to connect to HR sensor: {HR_SENSOR_MAC}")
             
             async with BleakClient(HR_SENSOR_MAC) as client:

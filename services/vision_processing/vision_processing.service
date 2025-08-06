@@ -1,0 +1,33 @@
+[Unit]
+Description=CogniFlight Vision Processing Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=notify
+User=jeremia
+Group=jeremia
+WorkingDirectory=/home/jeremia/projects/cogniflight-edge-backup/services/vision_processing
+Environment=PATH=/home/jeremia/projects/cogniflight-edge-backup/services/vision_processing/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PYTHONPATH=/home/jeremia/projects/cogniflight-edge-backup
+ExecStart=/home/jeremia/projects/cogniflight-edge-backup/services/vision_processing/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StartLimitBurst=3
+StartLimitIntervalSec=60
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits - Optimized for RPi5 16GB (Real-time video processing)
+MemoryMax=3G
+CPUQuota=100%
+CPUWeight=1000
+Nice=-5
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

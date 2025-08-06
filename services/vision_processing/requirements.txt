@@ -1,0 +1,7 @@
+opencv-python-headless
+numpy
+mediapipe
+
+# For CogniCore communication
+redis
+systemd-python

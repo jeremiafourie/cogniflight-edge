@@ -1,0 +1,7 @@
+# Predictor service requirements
+numpy
+scipy
+
+# For CogniCore communication
+redis
+systemd-python

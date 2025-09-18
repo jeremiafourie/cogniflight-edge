@@ -29,29 +29,21 @@ class EnhancedFatiguePredictor:
         self.fusion_history = deque(maxlen=TREND_WINDOW_SIZE)
         self.hr_baseline_buffer = deque(maxlen=60)  # 1 minute of HR data for dynamic baseline
         self.hrv_baseline_buffer = deque(maxlen=60)
-        self.last_altitude = None
-        self.rapid_altitude_changes = 0
-        self.excessive_motion_count = 0
         
-    def calculate_enhanced_fusion_score(self, vision_data, hr_data, env_data, motion_data):
+    def calculate_enhanced_fusion_score(self, vision_data, hr_data):
         """
-        Enhanced fusion algorithm using all available sensors with proper weighting
-        based on CogniFlight Edge sensor impact ratings
+        Simplified fusion algorithm using Vision (70%) and Heart Rate (30%) only
         """
         # Initialize component scores
         vision_score = 0.0
         hr_score = 0.0
-        motion_score = 0.0
-        env_score = 0.0
         
         # Data availability flags for confidence scoring
         has_vision = bool(vision_data)
         has_hr = bool(hr_data and hr_data.get('hr'))
-        has_env = bool(env_data)
-        has_motion = bool(motion_data)
         
         # ===========================================
-        # VISION ANALYSIS (40% weight - CRITICAL)
+        # VISION ANALYSIS (70% weight - CRITICAL)
         # ===========================================
         if has_vision:
             vision_score = self._calculate_vision_score(vision_data)
@@ -63,35 +55,19 @@ class EnhancedFatiguePredictor:
             hr_score = self._calculate_hr_score(hr_data)
         
         # ===========================================
-        # MOTION ANALYSIS (20% weight - HIGH)
-        # ===========================================
-        if has_motion:
-            motion_score = self._calculate_motion_score(motion_data)
-        
-        # ===========================================
-        # ENVIRONMENTAL ANALYSIS (10% weight - MEDIUM)
-        # ===========================================
-        if has_env:
-            env_score = self._calculate_environmental_score(env_data)
-        
-        # ===========================================
-        # ADAPTIVE FUSION WITH CONFIDENCE WEIGHTING
+        # SIMPLIFIED FUSION (VISION + HR ONLY)
         # ===========================================
         
-        # Base weights from sensor reference document
+        # Base weights - Vision and HR only
         base_weights = {
-            'vision': 0.40,
-            'hr': 0.30, 
-            'motion': 0.20,
-            'env': 0.10
+            'vision': 0.70,
+            'hr': 0.30
         }
         
-        # Adjust weights based on data availability and quality
+        # Adjust weights based on data availability
         available_sensors = []
         if has_vision: available_sensors.append('vision')
         if has_hr: available_sensors.append('hr')
-        if has_motion: available_sensors.append('motion')
-        if has_env: available_sensors.append('env')
         
         if not available_sensors:
             return 0.0, 0.0  # No data, no confidence
@@ -99,12 +75,10 @@ class EnhancedFatiguePredictor:
         # Redistribute weights among available sensors
         adjusted_weights = self._redistribute_weights(base_weights, available_sensors)
         
-        # Calculate weighted fusion score
+        # Calculate weighted fusion score (Vision + HR only)
         fusion_score = (
             vision_score * adjusted_weights.get('vision', 0) +
-            hr_score * adjusted_weights.get('hr', 0) +
-            motion_score * adjusted_weights.get('motion', 0) +
-            env_score * adjusted_weights.get('env', 0)
+            hr_score * adjusted_weights.get('hr', 0)
         )
         
         # Calculate confidence based on sensor availability and data quality
@@ -216,98 +190,6 @@ class EnhancedFatiguePredictor:
         
         return min(1.0, score)
     
-    def _calculate_motion_score(self, motion_data):
-        """Motion analysis for loss of control detection"""
-        score = 0.0
-        
-        # Angular Velocity Analysis (HIGH impact)
-        gyro_x = abs(motion_data.get("gyro_x", 0))  # Roll rate
-        gyro_y = abs(motion_data.get("gyro_y", 0))  # Pitch rate
-        gyro_z = abs(motion_data.get("gyro_z", 0))  # Yaw rate
-        
-        # Critical thresholds from reference document
-        max_gyro = max(gyro_x, gyro_y, gyro_z)
-        if max_gyro > 500:  # Critical - loss of control
-            gyro_score = 1.0
-            self.excessive_motion_count += 1
-        elif max_gyro > 200:  # Concerning excessive movement
-            gyro_score = (max_gyro - 100) / 400.0
-        else:
-            gyro_score = 0.0
-        
-        # Altitude Change Rate (HIGH impact)
-        altitude_change_rate = abs(motion_data.get("altitude_change_rate", 0))
-        if altitude_change_rate > 50:  # Critical unplanned altitude change
-            altitude_score = 1.0
-            self.rapid_altitude_changes += 1
-        elif altitude_change_rate > 20:  # Moderate concern
-            altitude_score = (altitude_change_rate - 10) / 40.0
-        else:
-            altitude_score = 0.0
-        
-        # Vibration Analysis (acceleration Z-axis)
-        accel_z = abs(motion_data.get("accel_z", 1.0))  # 1g is normal
-        if accel_z > 4.0:  # Excessive vibration
-            vibration_score = min(1.0, (accel_z - 2.0) / 4.0)
-        else:
-            vibration_score = 0.0
-        
-        # Combine motion components (weighted by impact)
-        score = (gyro_score * 0.50 +      # Angular velocity (highest impact)
-                altitude_score * 0.35 +    # Altitude changes
-                vibration_score * 0.15)    # Vibration
-        
-        return min(1.0, score)
-    
-    def _calculate_environmental_score(self, env_data):
-        """Environmental stress analysis"""
-        score = 0.0
-        
-        # Temperature Analysis
-        temp = env_data.get("temp")
-        if temp is not None:
-            if temp < -20 or temp > 40:  # Critical temperatures
-                temp_score = 1.0
-            elif temp < 0 or temp > 35:  # Uncomfortable
-                temp_score = 0.5
-            elif temp < 10 or temp > 30:  # Slightly uncomfortable
-                temp_score = 0.2
-            else:
-                temp_score = 0.0
-        else:
-            temp_score = 0.0
-        
-        # Humidity Analysis
-        humidity = env_data.get("humidity")
-        if humidity is not None:
-            if humidity < 20 or humidity > 80:  # Uncomfortable humidity
-                humidity_score = 0.5
-            elif humidity < 30 or humidity > 70:  # Slightly uncomfortable
-                humidity_score = 0.2
-            else:
-                humidity_score = 0.0
-        else:
-            humidity_score = 0.0
-        
-        # Pressure Analysis (hypoxia risk)
-        pressure = env_data.get("pressure")
-        if pressure is not None:
-            if pressure < 500:  # Critical - hypoxia risk
-                pressure_score = 1.0
-            elif pressure < 700:  # High altitude concern
-                pressure_score = (700 - pressure) / 200.0
-            else:
-                pressure_score = 0.0
-        else:
-            pressure_score = 0.0
-        
-        # Combine environmental factors
-        score = (temp_score * 0.40 + 
-                humidity_score * 0.30 + 
-                pressure_score * 0.30)
-        
-        return min(1.0, score)
-    
     def _redistribute_weights(self, base_weights, available_sensors):
         """Redistribute weights when sensors are unavailable"""
         if len(available_sensors) == len(base_weights):
@@ -325,7 +207,7 @@ class EnhancedFatiguePredictor:
     
     def _calculate_confidence(self, available_sensors, vision_data, hr_data):
         """Calculate confidence score based on data availability and quality"""
-        base_confidence = len(available_sensors) / 4.0  # 4 total sensor types
+        base_confidence = len(available_sensors) / 2.0  # 2 total sensor types (Vision + HR only)
         
         # Adjust for data quality
         quality_bonus = 0.0
@@ -334,12 +216,12 @@ class EnhancedFatiguePredictor:
             # High quality vision data (all metrics available)
             vision_metrics = ['avg_ear', 'eyes_closed', 'closure_duration', 'microsleep_count']
             vision_completeness = sum(1 for metric in vision_metrics if vision_data.get(metric) is not None) / len(vision_metrics)
-            quality_bonus += vision_completeness * 0.2
+            quality_bonus += vision_completeness * 0.3  # Increased since vision is more important
         
         if hr_data:
             # High quality HR data (HRV available)
             if hr_data.get('rmssd') is not None:
-                quality_bonus += 0.15
+                quality_bonus += 0.2  # Increased weighting for HRV availability
         
         return min(1.0, base_confidence + quality_bonus)
     
@@ -365,18 +247,16 @@ class EnhancedFatiguePredictor:
         
         return smoothed_score
 
-def calculate_fusion_score(vision_data, hr_data, env_data=None, motion_data=None):
+def calculate_fusion_score(vision_data, hr_data):
     """
-    Enhanced fusion score calculation using all available sensors
+    Simplified fusion score calculation using Vision (70%) and Heart Rate (30%) only
     """
     global predictor
     
     if 'predictor' not in globals():
         predictor = EnhancedFatiguePredictor()
     
-    fusion_score, confidence = predictor.calculate_enhanced_fusion_score(
-        vision_data, hr_data, env_data, motion_data
-    )
+    fusion_score, confidence = predictor.calculate_enhanced_fusion_score(vision_data, hr_data)
     
     return fusion_score, confidence
 
@@ -414,10 +294,10 @@ def determine_fatigue_stage(avg_score, thresholds, confidence):
         return "active"
 
 def main():
-    """Enhanced predictor service with comprehensive sensor fusion"""
+    """Simplified predictor service using Vision (70%) and HR (30%) only"""
     core = CogniCore(SERVICE_NAME)
     logger = core.get_logger(SERVICE_NAME)
-    logger.info("Enhanced Predictor service started with comprehensive sensor fusion")
+    logger.info("Simplified Predictor service started - Vision (70%) + HR (30%) only")
     
     # Notify systemd that service is ready
     systemd.daemon.notify('READY=1')
@@ -432,11 +312,9 @@ def main():
         while True:
             current_time = time.time()
             
-            # Collect all sensor data
+            # Collect vision and HR data only
             vision_data = core.get_data("vision")
             hr_data = core.get_data("hr_sensor")
-            env_data = core.get_data("env_sensor") 
-            motion_data = core.get_data("motion_sensor")  # Assuming MPU9250 data
             
             # Check if vision data is fresh (primary sensor)
             vision_timestamp = vision_data.get("timestamp", 0) if vision_data else 0
@@ -444,12 +322,10 @@ def main():
             is_vision_fresh = vision_age < 10
             
             if vision_data and is_vision_fresh:
-                # Calculate enhanced fusion score
-                fusion_score, confidence = calculate_fusion_score(
-                    vision_data, hr_data, env_data, motion_data
-                )
+                # Calculate fusion score (Vision + HR only)
+                fusion_score, confidence = calculate_fusion_score(vision_data, hr_data)
                 
-                # Enhanced fusion data publication
+                # Simplified fusion data publication (Vision + HR only)
                 fusion_data = {
                     "fusion_score": fusion_score,
                     "confidence": confidence,
@@ -463,22 +339,9 @@ def main():
                     "hr": hr_data.get("hr") if hr_data else None,
                     "rmssd": hr_data.get("rmssd") if hr_data else None,
                     "stress_index": hr_data.get("stress_index") if hr_data else None,
-                    # Environmental metrics
-                    "temperature": env_data.get("temp") if env_data else None,
-                    "humidity": env_data.get("humidity") if env_data else None,
-                    "pressure": env_data.get("pressure") if env_data else None,
-                    # Motion metrics
-                    "max_angular_velocity": max([
-                        abs(motion_data.get("gyro_x", 0)),
-                        abs(motion_data.get("gyro_y", 0)),
-                        abs(motion_data.get("gyro_z", 0))
-                    ]) if motion_data else None,
-                    "altitude_change_rate": motion_data.get("altitude_change_rate") if motion_data else None,
                     # Timestamps
                     "vision_timestamp": vision_data.get("timestamp"),
-                    "hr_timestamp": hr_data.get("timestamp") if hr_data else None,
-                    "env_timestamp": env_data.get("timestamp") if env_data else None,
-                    "motion_timestamp": motion_data.get("timestamp") if motion_data else None
+                    "hr_timestamp": hr_data.get("timestamp") if hr_data else None
                 }
                 
                 core.publish_data("fusion", fusion_data)
@@ -510,7 +373,7 @@ def main():
                         logger.info(f"Fatigue stage change: {current_stage} → {new_stage} (confidence: {avg_confidence:.2f})")
                         current_stage = new_stage
                         
-                        # Enhanced alert data
+                        # Simplified alert data (Vision + HR factors only)
                         alert_data = {
                             "stage": new_stage,
                             "fusion_score": avg_score,
@@ -519,15 +382,13 @@ def main():
                             "threshold_used": thresholds.get(new_stage, 0),
                             "contributing_factors": {
                                 "vision": fusion_data.get("avg_ear", 0) < 0.20,
-                                "heart_rate": fusion_data.get("rmssd", 100) < 25,
-                                "motion": (fusion_data.get("max_angular_velocity", 0) or 0) > 200,
-                                "environment": (fusion_data.get("temperature", 20) or 20) < 0 or (fusion_data.get("temperature", 20) or 20) > 35
+                                "heart_rate": fusion_data.get("rmssd", 100) < 25
                             }
                         }
                         
                         core.publish_data("fatigue_alert", alert_data)
                     
-                    # Enhanced system state display
+                    # Simplified system state display (Vision + HR only)
                     stage_messages = {
                         "active": ("Alert & Ready", SystemState.MONITORING_ACTIVE),
                         "mild": ("Mild Fatigue", SystemState.ALERT_MILD),
@@ -537,14 +398,12 @@ def main():
                     
                     state_line, state_enum = stage_messages[current_stage]
                     
-                    # Enhanced sensor readings display
+                    # Display only Vision and HR readings
                     ear_display = f"{fusion_data.get('avg_ear', 0):.2f}".lstrip('0')
                     blink_rate = int(fusion_data.get("blink_rate", 0))
                     hr_display = int(fusion_data.get("hr", 0)) if fusion_data.get("hr") else "N/A"
-                    temp_display = int(fusion_data.get("temperature", 0)) if fusion_data.get("temperature") else "N/A"
-                    humidity_display = int(fusion_data.get("humidity", 0)) if fusion_data.get("humidity") else "N/A"
                     
-                    display_message = f"{state_line} ({avg_confidence:.1f})\n{ear_display} {blink_rate} {hr_display} {temp_display} {humidity_display}"
+                    display_message = f"{state_line} ({avg_confidence:.1f})\n{ear_display} {blink_rate} {hr_display}"
                     
                     core.set_system_state(
                         state_enum,
@@ -557,7 +416,7 @@ def main():
                         }
                     )
                 
-                # Enhanced periodic logging
+                # Simplified periodic logging (Vision + HR only)
                 if current_time - last_fusion_heartbeat > 5:
                     stage_log_map = {
                         "active": "MONITORING_ACTIVE",
@@ -568,17 +427,13 @@ def main():
                     
                     logger.info(f"{stage_log_map[current_stage]} (confidence: {fusion_data.get('confidence', 0):.2f})")
                     
-                    # Comprehensive sensor reading log
+                    # Vision and HR readings only
                     readings = []
                     readings.append(f"EAR:{fusion_data.get('avg_ear', 0):.3f}")
                     readings.append(f"BLINK:{int(fusion_data.get('blink_rate', 0))}")
                     readings.append(f"HR:{fusion_data.get('hr', 'N/A')}")
                     if fusion_data.get('rmssd'):
                         readings.append(f"HRV:{fusion_data.get('rmssd'):.0f}")
-                    readings.append(f"TEMP:{fusion_data.get('temperature', 'N/A')}")
-                    readings.append(f"HUM:{fusion_data.get('humidity', 'N/A')}")
-                    if fusion_data.get('max_angular_velocity'):
-                        readings.append(f"GYRO:{fusion_data.get('max_angular_velocity'):.0f}")
                     
                     logger.info(" | ".join(readings))
                     last_fusion_heartbeat = current_time
@@ -591,7 +446,7 @@ def main():
             elif vision_data and not is_vision_fresh:
                 # Stale data warning
                 if not hasattr(main, '_last_stale_warning') or current_time - main._last_stale_warning > 30:
-                    logger.warning(f"Vision data is stale ({vision_age:.1f}s old) - enhanced prediction unavailable")
+                    logger.warning(f"Vision data is stale ({vision_age:.1f}s old) - prediction unavailable")
                     main._last_stale_warning = current_time
             
             # Regular watchdog
@@ -602,7 +457,7 @@ def main():
             time.sleep(0.05)  # 20Hz processing
     
     except KeyboardInterrupt:
-        logger.info("Enhanced Predictor service stopping...")
+        logger.info("Simplified Predictor service stopping...")
         core.shutdown()
 
 if __name__ == "__main__":

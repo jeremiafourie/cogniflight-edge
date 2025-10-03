@@ -76,7 +76,7 @@ graph TB
     end
     
     %% Cloud Infrastructure Layer
-    subgraph "Cloud Platform - Docker Compose Stack"
+    subgraph "Cloud Platform"
         subgraph "Data Pipeline"
             TELEGRAF[Telegraf 1.34<br/>MQTT Consumer<br/>Data Processor]
             INFLUX[(InfluxDB 2.7<br/>Time-Series DB<br/>Telemetry Storage)]
@@ -90,7 +90,7 @@ graph TB
         end
         
         subgraph "Data Persistence"
-            MONGO[(MongoDB 8.0<br/>Collections:<br/>• users<br/>• flights<br/>• alerts<br/>• edge_nodes<br/>• api_keys<br/>• sessions)]
+            MONGO[(MongoDB 8.0<br/>Collections:<br/>• vfs)]
             GRIDFS[(GridFS<br/>File Storage<br/>User Images<br/>Documents)]
         end
         
@@ -117,12 +117,11 @@ graph TB
     MQTT_BROKER --> TELEGRAF
     TELEGRAF -->|Write| INFLUX
     
-    GO_API -->|CRUD| MONGO
-    GO_API -->|Files| GRIDFS
+    GO_API -->|Manage files| MONGO
+    GO_API -->|Store files| GRIDFS
     GO_API -->|Query| INFLUX
     
     ML_ENGINE -->|Read| INFLUX
-    ML_ENGINE -->|Write| MONGO
     
     %% Styling
     classDef edge fill:#fff3e0,stroke:#ff9800,stroke-width:3px

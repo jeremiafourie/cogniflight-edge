@@ -55,7 +55,7 @@ class EnhancedFatiguePredictor:
             hr_score = self._calculate_hr_score(hr_data)
         
         # ===========================================
-        # SIMPLIFIED FUSION (VISION + HR ONLY)
+        # SIMPLIFIED FUSION (VISION + HR)
         # ===========================================
         
         # Base weights - Vision and HR only

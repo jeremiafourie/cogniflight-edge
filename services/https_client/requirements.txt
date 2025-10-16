@@ -1,8 +1,0 @@
-# HTTPS client requirements
-requests
-urllib3
-numpy
-
-# For CogniCore communication
-redis
-systemd-python

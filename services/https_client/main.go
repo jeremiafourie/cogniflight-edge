@@ -68,7 +68,7 @@ func main() {
 			}
 
 			keys := val.Val()
-			username, ok := keys["username"]
+			username, ok := keys["pilot_username"]
 			if !ok {
 				continue
 			}

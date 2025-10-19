@@ -78,6 +78,22 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 
 	flight_id := ""
 	if latest_file == -1 {
+		stdout.Reset()
+		stderr.Reset()
+		timestamp := time.Now().UnixNano()
+		status, err := api_client.RunCommand(ctx, client.CommandOptions{
+			Command: fmt.Sprintf("tee flights/%d.flight", timestamp),
+			Stdin:   strings.NewReader(""),
+			Stdout:  stdout,
+			Stderr:  stderr,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create flight (%d): %v", timestamp, err)
+		}
+
+		if status != 0 {
+			return nil, fmt.Errorf("tee command failed for flight %d: %v", timestamp, err)
+		}
 	} else {
 		stdout.Reset()
 		stderr.Reset()

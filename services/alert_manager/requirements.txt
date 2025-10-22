@@ -3,10 +3,6 @@ gpiozero
 RPi.GPIO
 lgpio
 
-# LCD Display Support
-RPLCD
-smbus2
-
 # Redis Client (for CogniCore communication)
 redis
 

@@ -1,0 +1,33 @@
+[Unit]
+Description=CogniFlight Go Client Service
+After=network-online.target redis.service
+Wants=network-online.target
+Requires=redis.service
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=jeremia
+Group=jeremia
+WorkingDirectory=/home/jeremia/Projects/cogniflight-edge/services/go_client
+EnvironmentFile=/home/jeremia/Projects/cogniflight-edge/services/go_client/.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/jeremia/Projects/cogniflight-edge/services/go_client/go_client
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits - Optimized for RPi5 16GB (Go client)
+MemoryMax=512M
+CPUQuota=30%
+CPUWeight=250
+Nice=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=multi-user.target

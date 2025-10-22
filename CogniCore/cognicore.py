@@ -18,7 +18,7 @@ import os
 from typing import Dict, Any, Optional, Callable, List
 
 from .state import SystemState, PilotProfile, SystemStatusMessage, StateSnapshot, get_state_manager
-from .exceptions import CogniCoreError, ConnectionError as CogniConnectionError, ValidationError
+from .exceptions import CogniCoreError, ConnectionError as CogniConnectionError, ValidationError, InvalidStateTransitionError, StatePermissionError
 from . import config
 
 # Configure logging for systemd journald
@@ -58,7 +58,19 @@ class CogniCore:
         self.redis_host = redis_host or os.getenv('REDIS_HOST', 'localhost')
         self.redis_port = redis_port or int(os.getenv('REDIS_PORT', '6379'))
         self.redis_db = redis_db or int(os.getenv('REDIS_DB', '0'))
-        self.connection_timeout = connection_timeout or int(os.getenv('REDIS_TIMEOUT', '5'))
+        self.connection_timeout = connection_timeout or int(os.getenv('REDIS_TIMEOUT', '10'))  # Increased for network
+        
+        # Network-specific Redis configuration
+        self.redis_password = os.getenv('REDIS_PASSWORD', None)  # Optional authentication
+        self.retry_on_timeout = os.getenv('REDIS_RETRY_ON_TIMEOUT', 'true').lower() == 'true'
+        self.socket_keepalive = os.getenv('REDIS_SOCKET_KEEPALIVE', 'true').lower() == 'true'
+        # Import socket constants for keepalive options
+        import socket
+        self.socket_keepalive_options = {
+            socket.TCP_KEEPIDLE: int(os.getenv('REDIS_TCP_KEEPIDLE', '1')),
+            socket.TCP_KEEPINTVL: int(os.getenv('REDIS_TCP_KEEPINTVL', '3')),
+            socket.TCP_KEEPCNT: int(os.getenv('REDIS_TCP_KEEPCNT', '5'))
+        }
         
         # Redis configuration
         self.redis_ttl = int(os.getenv('REDIS_TTL', '300'))  # 5 minutes default
@@ -88,17 +100,29 @@ class CogniCore:
         """Connect to Redis - raises exception if Redis unavailable"""
         try:
             # Main Redis client
-            # Use connection pooling for better resource management
-            self._redis_pool = redis.ConnectionPool(
-                host=self.redis_host,
-                port=self.redis_port,
-                db=self.redis_db,
-                decode_responses=True,
-                socket_connect_timeout=self.connection_timeout,
-                socket_timeout=self.connection_timeout,
-                health_check_interval=self.health_check_interval,
-                max_connections=10  # Pool size
-            )
+            # Use connection pooling for better resource management with network optimizations
+            pool_kwargs = {
+                'host': self.redis_host,
+                'port': self.redis_port,
+                'db': self.redis_db,
+                'decode_responses': True,
+                'socket_connect_timeout': self.connection_timeout,
+                'socket_timeout': self.connection_timeout,
+                'health_check_interval': self.health_check_interval,
+                'max_connections': 10,  # Pool size
+                'retry_on_timeout': self.retry_on_timeout,
+                'socket_keepalive': self.socket_keepalive
+            }
+            
+            # Add authentication if configured
+            if self.redis_password:
+                pool_kwargs['password'] = self.redis_password
+                
+            # Add keepalive options for network connections
+            if self.socket_keepalive:
+                pool_kwargs['socket_keepalive_options'] = self.socket_keepalive_options
+            
+            self._redis_pool = redis.ConnectionPool(**pool_kwargs)
             
             self._redis_client = redis.Redis(connection_pool=self._redis_pool)
             
@@ -106,13 +130,25 @@ class CogniCore:
             self._redis_client.ping()
             
             # Subscriber client for keyspace notifications (separate connection)
-            self._redis_subscriber = redis.Redis(
-                host=self.redis_host,
-                port=self.redis_port,
-                db=self.redis_db,
-                decode_responses=True,
-                socket_connect_timeout=self.connection_timeout
-            )
+            subscriber_kwargs = {
+                'host': self.redis_host,
+                'port': self.redis_port,
+                'db': self.redis_db,
+                'decode_responses': True,
+                'socket_connect_timeout': self.connection_timeout,
+                'socket_keepalive': self.socket_keepalive,
+                'retry_on_timeout': self.retry_on_timeout
+            }
+            
+            # Add authentication if configured
+            if self.redis_password:
+                subscriber_kwargs['password'] = self.redis_password
+                
+            # Add keepalive options for network connections
+            if self.socket_keepalive:
+                subscriber_kwargs['socket_keepalive_options'] = self.socket_keepalive_options
+            
+            self._redis_subscriber = redis.Redis(**subscriber_kwargs)
             
             # Enable keyspace notifications for hash operations
             self._redis_client.config_set('notify-keyspace-events', 'Kh')
@@ -325,58 +361,78 @@ class CogniCore:
     
     # ==================== STATE MANAGEMENT ====================
     
-    def set_system_state(self, state: SystemState, message: str, pilot_id: Optional[str] = None, 
-                        data: Optional[Dict[str, Any]] = None):
+    def set_system_state(self, state: SystemState, message: str, pilot_username: Optional[str] = None,
+                        data: Optional[Dict[str, Any]] = None, force: bool = False):
         """
-        Set the single global system state using thread-safe state manager
-        
+        Set the single global system state using thread-safe state manager with enhanced validation
+
         Args:
             state: New system state
             message: Message to display for this state
-            pilot_id: Associated pilot ID
+            pilot_username: Associated pilot username
             data: Additional state data
+            force: Bypass validation (emergency use only)
+            
+        Raises:
+            InvalidStateTransitionError: If transition is not valid
+            StatePermissionError: If service lacks permission for this state
+            CogniConnectionError: If Redis operations fail
         """
-        # Get current state for logging
-        current_snapshot = self._state_manager.get_current_state()
-        old_state = current_snapshot.state.value if current_snapshot else 'unknown'
-        
-        # Use centralized thread-safe state manager - single source of truth
-        snapshot = self._state_manager.transition_state(
-            state=state,
-            message=message,
-            service=self.service_name,
-            pilot_id=pilot_id,
-            data=data
-        )
-        
-        # Store in Redis for persistence and inter-process communication
-        state_data = snapshot.to_dict()
-        self.publish_data('system_state', state_data)
-        
-        # Notify subscribers about state change
-        for callback in self._state_subscribers:
+        try:
+            # Use centralized thread-safe state manager with validation
+            snapshot = self._state_manager.transition_state(
+                state=state,
+                message=message,
+                service=self.service_name,
+                pilot_username=pilot_username,
+                data=data,
+                force=force
+            )
+            
+            # Store in Redis for persistence and inter-process communication
+            state_data = snapshot.to_dict()
+            self.publish_data('system_state', state_data)
+            
+            # Notify local subscribers about state change
+            for callback in self._state_subscribers:
+                try:
+                    callback(state_data)
+                except Exception as e:
+                    logger.error(f"Error in local state subscriber callback: {e}")
+            
+            # Publish to Redis channel for other processes
             try:
-                callback(state_data)
-            except Exception as e:
-                logger.error(f"Error in state subscriber callback: {e}")
-        
-        # Publish to Redis channel for other processes
-        try:
-            self._redis_client.publish('cognicore:state_changes', json.dumps(state_data))
-        except (redis.ConnectionError, redis.TimeoutError) as e:
-            logger.error(f"Failed to publish state change to Redis channel: {e}")
-        
-        # Add to persistent state history
-        try:
-            history_key = "cognicore:state_history"
-            self._redis_client.lpush(history_key, json.dumps(state_data))
-            self._redis_client.ltrim(history_key, 0, self.history_limit - 1)
-        except (redis.ConnectionError, redis.TimeoutError):
-            logger.error("Failed to update state history")
+                self._redis_client.publish('cognicore:state_changes', json.dumps(state_data))
+            except (redis.ConnectionError, redis.TimeoutError) as e:
+                logger.error(f"Failed to publish state change to Redis channel: {e}")
+                # Don't raise here - local state is set, this is just inter-process notification
+            
+            # Add to persistent state history
+            try:
+                history_key = "cognicore:state_history"
+                self._redis_client.lpush(history_key, json.dumps(state_data))
+                self._redis_client.ltrim(history_key, 0, self.history_limit - 1)
+            except (redis.ConnectionError, redis.TimeoutError) as e:
+                logger.error(f"Failed to update state history: {e}")
+                # Don't raise here either - state is set, history is just for debugging
+            
+        except (InvalidStateTransitionError, StatePermissionError) as e:
+            # Re-raise validation errors for caller to handle
+            logger.error(f"State transition failed: {e}")
             raise
+        except Exception as e:
+            logger.error(f"Unexpected error during state transition: {e}")
+            raise CogniCoreError(f"State transition failed: {e}")
+    
+    def force_system_state(self, state: SystemState, message: str, pilot_username: Optional[str] = None,
+                          data: Optional[Dict[str, Any]] = None):
+        """
+        Force system state transition bypassing all validation (emergency use only)
         
-        # Log state change
-        logger.info(f"System state: {old_state} → {state.value} (service: {self.service_name}, pilot: {pilot_id})")
+        This method should only be used for emergency recovery scenarios.
+        """
+        logger.warning(f"EMERGENCY: Forcing state transition to {state.value}")
+        return self.set_system_state(state, message, pilot_username, data, force=True)
     
     def get_system_state(self) -> Optional[SystemState]:
         """Get current global system state from centralized state manager"""
@@ -390,116 +446,160 @@ class CogniCore:
         """Subscribe to system state changes"""
         self._state_subscribers.append(callback)
     
+    def get_state_manager_stats(self) -> Dict[str, Any]:
+        """Get state manager statistics for debugging"""
+        return {
+            "current_state": self._state_manager.get_current_system_state().value if self._state_manager.get_current_system_state() else None,
+            "history_size": len(self._state_manager.get_state_history()),
+            "callback_failures": self._state_manager.get_callback_stats(),
+            "permissions_enforced": self._state_manager._enforce_permissions
+        }
+    
+    def set_state_permission_enforcement(self, enforce: bool):
+        """Enable or disable state permission enforcement (admin use only)"""
+        if self.service_name not in ["system_monitor", "admin"]:
+            logger.warning(f"Service '{self.service_name}' attempted to change permission enforcement - denied")
+            raise StatePermissionError("Only system_monitor or admin services can change permission enforcement")
+        
+        self._state_manager.set_permission_enforcement(enforce)
+    
     # ==================== PILOT PROFILES ====================
     
-    def set_pilot_profile(self, profile: PilotProfile, activate: bool = True):
-        """Set pilot profile and optionally activate"""
+    def set_pilot_profile(self, profile: PilotProfile, authenticate: bool = True):
+        """Set pilot profile and optionally authenticate"""
         from dataclasses import asdict
-        
+
         # Store pilot data persistently (no TTL - profiles survive restarts)
         pilot_data = {
-            'pilot_id': profile.id,
-            'active': activate,  # Active flag for current session
-            'profile_loaded': True, 
+            'pilot_username': profile.username,
+            'authenticated': authenticate,  # Authenticated flag for current session
+            'flight_finished': profile.flight_finished,
+            'flight_id': profile.flight_id,
+            'profile_loaded': True,
             'loaded_by': self.service_name,
             # Include all profile data
-            'name': profile.name,
-            'flightHours': profile.flightHours,
-            'baseline': profile.baseline,
-            'environmentPreferences': profile.environmentPreferences
+            'personal_data': profile.personal_data
         }
-        
+
         # Use publish_data - will be persistent due to 'pilot:' pattern
-        self.publish_data(f'pilot:{profile.id}', pilot_data)
-        
-        status = "activated" if activate else "stored"
-        self.logger.info(f"Pilot profile {status}: {profile.id} (persistent)")
+        self.publish_data(f'pilot:{profile.username}', pilot_data)
+
+        status = "authenticated" if authenticate else "stored"
+        self.logger.info(f"Pilot profile {status}: {profile.username} (persistent)")
     
-    def get_pilot_profile(self, pilot_id: str) -> Optional[PilotProfile]:
-        """Get pilot profile by pilot_id"""
-        pilot_data = self.get_data(f'pilot:{pilot_id}')
+    def get_pilot_profile(self, pilot_username: str) -> Optional[PilotProfile]:
+        """Get pilot profile by pilot_username"""
+        pilot_data = self.get_data(f'pilot:{pilot_username}')
         if pilot_data and pilot_data.get('profile_loaded'):
             try:
                 return PilotProfile(
-                    id=pilot_data['pilot_id'],
-                    name=pilot_data['name'],
-                    flightHours=pilot_data['flightHours'], 
-                    baseline=pilot_data['baseline'],
-                    environmentPreferences=pilot_data['environmentPreferences']
+                    username=pilot_data['pilot_username'],
+                    authenticated=pilot_data.get('authenticated', False),
+                    flight_finished=pilot_data.get('flight_finished', False),
+                    flight_id=pilot_data.get('flight_id', ''),
+                    personal_data=pilot_data.get('personal_data', {})
                 )
             except (KeyError, TypeError) as e:
-                self.logger.error(f"Error parsing pilot data for {pilot_id}: {e}")
+                self.logger.error(f"Error parsing pilot data for {pilot_username}: {e}")
         return None
     
-    def get_active_pilot(self) -> Optional[str]:
-        """Get currently active pilot ID"""
-        # Check all pilot keys for active pilot
+    def get_authenticated_pilot(self) -> Optional[str]:
+        """Get currently authenticated pilot username"""
+        # Check all pilot keys for authenticated pilot
         try:
             pilot_keys = self._redis_client.keys("cognicore:data:pilot:*")
             for key in pilot_keys:
                 # Handle both bytes and string keys
                 if isinstance(key, bytes):
-                    pilot_id = key.decode().split(":")[-1]
+                    pilot_username = key.decode().split(":")[-1]
                 else:
-                    pilot_id = key.split(":")[-1]
-                    
-                pilot_data = self.get_data(f'pilot:{pilot_id}')
-                if pilot_data and pilot_data.get('active', False):
-                    return pilot_data.get('pilot_id')
+                    pilot_username = key.split(":")[-1]
+
+                pilot_data = self.get_data(f'pilot:{pilot_username}')
+                if pilot_data and pilot_data.get('authenticated', False):
+                    return pilot_data.get('pilot_username')
         except Exception as e:
             # Use self.logger instead of undefined logger
-            self.logger.error(f"Error finding active pilot: {e}")
+            self.logger.error(f"Error finding authenticated pilot: {e}")
         return None
     
-    def get_active_pilot_profile(self) -> Optional[PilotProfile]:
-        """Get currently active pilot profile"""
-        pilot_id = self.get_active_pilot()
-        return self.get_pilot_profile(pilot_id) if pilot_id else None
+    def get_authenticated_pilot_profile(self) -> Optional[PilotProfile]:
+        """Get currently authenticated pilot profile"""
+        pilot_username = self.get_authenticated_pilot()
+        return self.get_pilot_profile(pilot_username) if pilot_username else None
     
-    def set_pilot_active(self, pilot_id: str, active: bool = True):
-        """Set pilot active status"""
-        pilot_data = self.get_data(f'pilot:{pilot_id}')
+    def set_pilot_authenticated(self, pilot_username: str, authenticated: bool = True):
+        """Set pilot authenticated status"""
+        pilot_data = self.get_data(f'pilot:{pilot_username}')
         if pilot_data:
-            pilot_data['active'] = active
-            self.publish_data(f'pilot:{pilot_id}', pilot_data)
-            status = "activated" if active else "deactivated"
-            self.logger.info(f"Pilot {pilot_id} {status}")
+            pilot_data['authenticated'] = authenticated
+            self.publish_data(f'pilot:{pilot_username}', pilot_data)
+            status = "authenticated" if authenticated else "deauthenticated"
+            self.logger.info(f"Pilot {pilot_username} {status}")
             return True
         else:
-            self.logger.warning(f"Cannot set active status - pilot {pilot_id} not found")
+            self.logger.warning(f"Cannot set authenticated status - pilot {pilot_username} not found")
             return False
     
-    def deactivate_all_pilots(self):
-        """Deactivate all pilots (for face recognition startup)"""
+    def deauthenticate_all_pilots(self):
+        """Deauthenticate all pilots (for authenticator startup)"""
         try:
             pilot_keys = self._redis_client.keys("cognicore:data:pilot:*")
             for key in pilot_keys:
                 # Handle both bytes and string keys
                 if isinstance(key, bytes):
-                    pilot_id = key.decode().split(":")[-1]
+                    pilot_username = key.decode().split(":")[-1]
                 else:
-                    pilot_id = key.split(":")[-1]
-                    
-                pilot_data = self.get_data(f'pilot:{pilot_id}')
-                if pilot_data and pilot_data.get('active', False):
-                    pilot_data['active'] = False
-                    pilot_data['reason'] = 'face_recognition_startup'
-                    self.publish_data(f'pilot:{pilot_id}', pilot_data)
-                    self.logger.info(f"Deactivated pilot {pilot_id} on face recognition startup")
+                    pilot_username = key.split(":")[-1]
+
+                pilot_data = self.get_data(f'pilot:{pilot_username}')
+                if pilot_data and pilot_data.get('authenticated', False):
+                    pilot_data['authenticated'] = False
+                    pilot_data['reason'] = 'authenticator_startup'
+                    self.publish_data(f'pilot:{pilot_username}', pilot_data)
+                    self.logger.info(f"Deauthenticated pilot {pilot_username} on authenticator startup")
         except Exception as e:
-            self.logger.error(f"Error deactivating pilots: {e}")
-            
+            self.logger.error(f"Error deauthenticating pilots: {e}")
+
+    def set_flight_finished(self, pilot_username: str, finished: bool = True, reason: str = "face_lost"):
+        """
+        Set flight finished status for a pilot without deauthenticating.
+        This is used when pilot face is lost for extended period to mark
+        the flight as complete while preserving authentication status.
+
+        Args:
+            pilot_username: Username of the pilot
+            finished: Whether the flight is finished (default: True)
+            reason: Reason for marking flight finished (default: "face_lost")
+
+        Returns:
+            bool: True if successful, False if pilot not found
+        """
+        pilot_data = self.get_data(f'pilot:{pilot_username}')
+        if pilot_data:
+            pilot_data['flight_finished'] = finished
+            pilot_data['flight_finished_reason'] = reason
+            pilot_data['flight_finished_timestamp'] = time.time()
+            self.publish_data(f'pilot:{pilot_username}', pilot_data)
+
+            status = "finished" if finished else "resumed"
+            self.logger.info(f"Pilot {pilot_username} flight {status} (reason: {reason})")
+            return True
+        else:
+            self.logger.warning(f"Cannot set flight finished status - pilot {pilot_username} not found")
+            return False
+
     def list_pilots(self) -> list[str]:
-        """List all pilot IDs"""
+        """List all pilot usernames"""
         try:
             pilot_keys = self._redis_client.keys("cognicore:data:pilot:*")
-            pilot_ids = []
+            pilot_usernames = []
             for key in pilot_keys:
                 if isinstance(key, bytes):
-                    pilot_ids.append(key.decode().split(":")[-1])
+                    pilot_usernames.append(key.decode().split(":")[-1])
                 else:
-                    pilot_ids.append(key.split(":")[-1])
-            return pilot_ids
+                    pilot_usernames.append(key.split(":")[-1])
+            return pilot_usernames
         except Exception as e:
             self.logger.error(f"Error listing pilots: {e}")
             return []
@@ -593,6 +693,36 @@ class CogniCore:
             return True
         except:
             return False
+    
+    def get_connection_info(self) -> Dict[str, Any]:
+        """Get detailed connection information for network debugging"""
+        try:
+            info = self._redis_client.info()
+            client_info = self._redis_client.client_info()
+            
+            return {
+                "connected": True,
+                "redis_host": self.redis_host,
+                "redis_port": self.redis_port,
+                "redis_db": self.redis_db,
+                "server_version": info.get("redis_version"),
+                "connected_clients": info.get("connected_clients"),
+                "used_memory": info.get("used_memory_human"),
+                "uptime_in_seconds": info.get("uptime_in_seconds"),
+                "client_addr": client_info.get("addr", "unknown"),
+                "client_name": client_info.get("name", f"CogniCore-{self.service_name}"),
+                "auth_enabled": self.redis_password is not None,
+                "keepalive_enabled": self.socket_keepalive,
+                "connection_timeout": self.connection_timeout
+            }
+        except Exception as e:
+            return {
+                "connected": False,
+                "error": str(e),
+                "redis_host": self.redis_host,
+                "redis_port": self.redis_port,
+                "auth_enabled": self.redis_password is not None
+            }
     
     def get_stats(self) -> Dict[str, Any]:
         """Get CogniCore usage statistics"""

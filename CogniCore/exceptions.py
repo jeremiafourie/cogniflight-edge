@@ -16,3 +16,13 @@ class ConnectionError(CogniCoreError):
 class ValidationError(CogniCoreError):
     """Data validation failed."""
     pass
+
+
+class InvalidStateTransitionError(CogniCoreError):
+    """Invalid system state transition attempted."""
+    pass
+
+
+class StatePermissionError(CogniCoreError):
+    """Service attempted to set state it doesn't have permission for."""
+    pass

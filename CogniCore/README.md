@@ -9,7 +9,7 @@ CogniCore is a thread-safe Redis communication library designed for Cogniflight 
 ✅ **Real-Time Communication** - Redis pub/sub with keyspace notifications  
 ✅ **Configuration Management** - Environment variables with sensible defaults  
 ✅ **Production Ready** - Proper error handling, logging, and cleanup  
-✅ **Aviation Safety** - State transition validation for safety-critical systems
+✅ **Aviation Safety** - State transition validation for safety-critical systems  
 
 ## Quick Start
 
@@ -98,15 +98,13 @@ core = CogniCore(
 ## API Reference
 
 ### Core Initialization
-
 ```python
-CogniCore(service_name: str,
+CogniCore(service_name: str, 
           redis_host: Optional[str] = None,
-          redis_port: Optional[int] = None,
+          redis_port: Optional[int] = None, 
           redis_db: Optional[int] = None,
           connection_timeout: Optional[int] = None)
 ```
-
 - **service_name**: Unique identifier for this service
 - **redis_host**: Redis host (default: localhost or REDIS_HOST env var)
 - **redis_port**: Redis port (default: 6379 or REDIS_PORT env var)
@@ -114,7 +112,6 @@ CogniCore(service_name: str,
 - **connection_timeout**: Connection timeout (default: 5 or REDIS_TIMEOUT env var)
 
 ### Data Operations
-
 ```python
 # Publish data with automatic metadata
 core.publish_data(hash_name: str, data: Dict[str, Any])
@@ -128,11 +125,10 @@ core.unsubscribe_from_data(hash_name: str, callback: Callable)
 ```
 
 ### Thread-Safe State Management
-
 ```python
 # Set global system state (thread-safe)
-core.set_system_state(state: SystemState, message: str,
-                     pilot_id: Optional[str] = None,
+core.set_system_state(state: SystemState, message: str, 
+                     pilot_id: Optional[str] = None, 
                      data: Optional[Dict[str, Any]] = None)
 
 # Get current state (thread-safe)
@@ -154,7 +150,7 @@ CogniCore uses a simplified pilot system with `pilot:{pilot_id}` keys and active
 from CogniCore.state import PilotProfile
 
 profile = PilotProfile(
-    id="1234567",
+    id="jeremia",
     name="John Doe",
     flightHours=2500.0,
     baseline={
@@ -175,13 +171,13 @@ profile = PilotProfile(
 core.set_pilot_profile(profile, activate=True)
 
 # Pilot activation management
-core.set_pilot_active("1234567", active=True)    # Activate pilot
-core.set_pilot_active("1234567", active=False)   # Deactivate pilot
-core.deactivate_all_pilots()                     # Deactivate all (face recognition startup)
+core.set_pilot_active("jeremia", active=True)    # Activate pilot
+core.set_pilot_active("jeremia", active=False)   # Deactivate pilot
+core.deactivate_all_pilots()                     # Deactivate all (authenticator startup)
 
 # Retrieve pilot information
 active_pilot_id = core.get_active_pilot()        # Get active pilot ID
-profile = core.get_pilot_profile("1234567")      # Get specific pilot profile
+profile = core.get_pilot_profile("jeremia")      # Get specific pilot profile
 active_profile = core.get_active_pilot_profile() # Get active pilot's full profile
 all_pilot_ids = core.list_pilots()               # List all pilot IDs
 
@@ -189,24 +185,22 @@ all_pilot_ids = core.list_pilots()               # List all pilot IDs
 def on_pilot_change(hash_name, data):
     pilot_id = data.get('pilot_id') if data else None
     is_active = data.get('active', False) if data else False
-
+    
     if pilot_id and is_active:
         print(f"Pilot {pilot_id} activated")
     elif pilot_id and not is_active:
         print(f"Pilot {pilot_id} deactivated")
 
-core.subscribe_to_data("pilot:1234567", on_pilot_change)
+core.subscribe_to_data("pilot:jeremia", on_pilot_change)
 ```
 
 **Key Features:**
-
 - **Single Data Structure**: Uses `pilot:{pilot_id}` keys with active flag - no separate cache needed
 - **Persistent Storage**: Pilot profiles are persistent and survive service restarts
 - **Reactive Updates**: Services subscribe to pilot changes for camera handover
 - **Keyspace Notifications**: Maintains pilot_id in key for proper subscription notifications
 
 ### Utilities
-
 ```python
 # System monitoring
 core.is_connected() -> bool
@@ -232,11 +226,32 @@ class SystemState(Enum):
     ALERT_MILD = "alert_mild"               # Early fatigue warning
     ALERT_MODERATE = "alert_moderate"       # Escalated warning
     ALERT_SEVERE = "alert_severe"           # Critical alert
+    ALCOHOL_DETECTED = "alcohol_detected"   # Alcohol detected by sensor
     SYSTEM_ERROR = "system_error"           # Service malfunction
     SYSTEM_CRASHED = "system_crashed"       # Critical failure
 ```
 
 **State Transition Validation**: The system enforces valid state transitions to prevent invalid states in safety-critical aviation applications.
+
+### Service State Permissions
+
+For security and system integrity, each service has restricted permissions for state changes:
+
+```python
+SERVICE_STATE_PERMISSIONS = {
+    "authenticator": [SCANNING, INTRUDER_DETECTED],
+    "predictor": [MONITORING_ACTIVE, ALERT_MILD, ALERT_MODERATE, ALERT_SEVERE, ALCOHOL_DETECTED],
+    "alert_manager": [],  # Consumer only - no state setting permissions
+    "vision_processor": [SYSTEM_ERROR],  # Can report errors only
+    "network_connector": [SYSTEM_ERROR],
+    "https_client": [SYSTEM_ERROR],
+    "bio_monitor": [SYSTEM_ERROR],
+    "env_monitor": [SYSTEM_ERROR],
+    "system_monitor": [SYSTEM_ERROR, SYSTEM_CRASHED, SCANNING]  # System recovery
+}
+```
+
+This permission system ensures that only authorized services can trigger critical state changes, enhancing system security and preventing unauthorized state modifications.
 
 ## Error Handling
 
@@ -284,7 +299,6 @@ core.shutdown()
 ## Production Deployment
 
 ### Environment Setup
-
 ```bash
 # Redis Configuration
 export REDIS_HOST=redis.internal
@@ -301,7 +315,6 @@ export STATE_HISTORY_LIMIT=1000
 ```
 
 ### Service Integration
-
 ```python
 # Production service template
 import signal
@@ -314,36 +327,36 @@ class MyService:
         self.core = CogniCore("my_service")
         self.logger = self.core.get_logger()
         self.running = True
-
+        
     def start(self):
         # Setup signal handlers
         signal.signal(signal.SIGTERM, self.shutdown)
         signal.signal(signal.SIGINT, self.shutdown)
-
+        
         self.logger.info("Service starting...")
-
+        
         # Notify systemd that service is ready
         systemd.daemon.notify('READY=1')
-
+        
         try:
             # Main service loop
             while self.running:
                 # Send systemd watchdog keepalive
                 systemd.daemon.notify('WATCHDOG=1')
-
+                
                 # Your service logic here
                 time.sleep(1)
-
+                
         except Exception as e:
             self.logger.error(f"Service error: {e}")
             self.core.set_system_state(SystemState.SYSTEM_ERROR, f"Error: {e}")
         finally:
             self.cleanup()
-
+    
     def shutdown(self, signum=None, frame=None):
         self.logger.info("Service shutting down...")
         self.running = False
-
+    
     def cleanup(self):
         self.core.shutdown()
         self.logger.info("Service stopped")
@@ -355,13 +368,12 @@ if __name__ == "__main__":
 
 ## Requirements
 
-- **Python**
-- **Redis Server** with keyspace notifications enabled
-- **redis-py**
-- **systemd-python** for service integration
+- **Python 3.8+**
+- **Redis Server 4.0+** with keyspace notifications enabled
+- **redis-py >= 4.0.0**
+- **systemd-python >= 235** for service integration
 
 ### Redis Configuration
-
 ```bash
 # Enable keyspace notifications (required)
 redis-cli CONFIG SET notify-keyspace-events Kh
@@ -370,19 +382,16 @@ redis-cli CONFIG SET notify-keyspace-events Kh
 ## Architecture Benefits
 
 ### Thread Safety
-
 - **Global State Manager**: Single source of truth with thread-safe operations
 - **Connection Pooling**: Thread-safe Redis connection management
 - **Immutable Snapshots**: State snapshots prevent race conditions
 
 ### Performance
-
 - **Connection Pooling**: Reuses Redis connections for better performance
 - **Efficient Serialization**: Optimized JSON handling for data storage
 - **Configurable TTL**: Automatic cleanup of stale data
 
 ### Reliability
-
 - **Error Recovery**: Automatic reconnection and error handling
 - **Resource Cleanup**: Proper shutdown procedures prevent leaks
 - **State Validation**: Aviation safety state transition validation

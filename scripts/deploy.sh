@@ -19,6 +19,16 @@ CONFIG_DIR="/etc/cogniflight"
 SYSTEMD_DIR="/etc/systemd/system"
 TARGET_USER="${DEPLOY_USER:-$(logname 2>/dev/null || whoami)}"
 
+# Setup pyenv for Python 3.11 (mediapipe doesn't support Python 3.13)
+export PYENV_ROOT="/home/$TARGET_USER/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+if command -v pyenv >/dev/null 2>&1; then
+    eval "$(pyenv init - bash)"
+    PYTHON_BIN="$PYENV_ROOT/versions/3.11.11/bin/python3"
+else
+    PYTHON_BIN="python3"
+fi
+
 # Deployment mode (primary/secondary/full)
 DEPLOYMENT_MODE=""
 PRIMARY_HOST="cogniflight.local"  # Fixed primary hostname
@@ -135,11 +145,11 @@ install_dependencies() {
         build-essential cmake pkg-config gfortran \
         redis-server \
         libjpeg-dev libpng-dev libtiff-dev \
-        libhdf5-dev libatlas-base-dev libopenblas-dev \
+        libhdf5-dev libopenblas-dev \
         python3-lgpio python3-gpiozero \
         i2c-tools \
         libsystemd-dev libcap-dev \
-        libgl1-mesa-glx libglib2.0-0 \
+        libgl1 libglib2.0-0 \
         python3-redis
 
     # Install Go if go_client is being deployed
@@ -406,8 +416,13 @@ create_virtualenvs() {
         service_dir="$PROJECT_ROOT/services/$service"
         if [[ -d "$service_dir" ]]; then
             if [[ ! -d "$service_dir/.venv" ]]; then
-                print_status "Creating venv for $service..."
-                sudo -u "$TARGET_USER" python3 -m venv "$service_dir/.venv"
+                print_status "Creating venv for $service using Python 3.11..."
+                # Use pyenv Python 3.11 if available, otherwise fall back to system python3
+                if [[ -f "$PYTHON_BIN" ]]; then
+                    sudo -u "$TARGET_USER" "$PYTHON_BIN" -m venv "$service_dir/.venv"
+                else
+                    sudo -u "$TARGET_USER" python3 -m venv "$service_dir/.venv"
+                fi
                 sudo -u "$TARGET_USER" "$service_dir/.venv/bin/pip" install --upgrade pip setuptools wheel
             fi
 

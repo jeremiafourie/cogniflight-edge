@@ -21,8 +21,8 @@ Usage:
 
 from .cognicore import CogniCore
 from .state import SystemState, PilotProfile
-from .exceptions import CogniCoreError, ConnectionError, ValidationError, InvalidStateTransitionError, StatePermissionError
+from .exceptions import CogniCoreError, ConnectionError, ValidationError, StatePermissionError
 from . import config
 
 __version__ = "1.1.0"
-__all__ = ["CogniCore", "SystemState", "PilotProfile", "config", "CogniCoreError", "ConnectionError", "ValidationError", "InvalidStateTransitionError", "StatePermissionError"]
+__all__ = ["CogniCore", "SystemState", "PilotProfile", "config", "CogniCoreError", "ConnectionError", "ValidationError", "StatePermissionError"]

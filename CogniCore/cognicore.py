@@ -18,7 +18,7 @@ import os
 from typing import Dict, Any, Optional, Callable, List
 
 from .state import SystemState, PilotProfile, SystemStatusMessage, StateSnapshot, get_state_manager
-from .exceptions import CogniCoreError, ConnectionError as CogniConnectionError, ValidationError, InvalidStateTransitionError, StatePermissionError
+from .exceptions import CogniCoreError, ConnectionError as CogniConnectionError, ValidationError, StatePermissionError
 from . import config
 
 # Configure logging for systemd journald
@@ -364,22 +364,21 @@ class CogniCore:
     def set_system_state(self, state: SystemState, message: str, pilot_username: Optional[str] = None,
                         data: Optional[Dict[str, Any]] = None, force: bool = False):
         """
-        Set the single global system state using thread-safe state manager with enhanced validation
+        Set the single global system state using thread-safe state manager
 
         Args:
             state: New system state
             message: Message to display for this state
             pilot_username: Associated pilot username
             data: Additional state data
-            force: Bypass validation (emergency use only)
-            
+            force: Bypass permission validation (emergency use only)
+
         Raises:
-            InvalidStateTransitionError: If transition is not valid
             StatePermissionError: If service lacks permission for this state
             CogniConnectionError: If Redis operations fail
         """
         try:
-            # Use centralized thread-safe state manager with validation
+            # Use centralized thread-safe state manager
             snapshot = self._state_manager.transition_state(
                 state=state,
                 message=message,
@@ -388,25 +387,25 @@ class CogniCore:
                 data=data,
                 force=force
             )
-            
+
             # Store in Redis for persistence and inter-process communication
             state_data = snapshot.to_dict()
             self.publish_data('system_state', state_data)
-            
+
             # Notify local subscribers about state change
             for callback in self._state_subscribers:
                 try:
                     callback(state_data)
                 except Exception as e:
                     logger.error(f"Error in local state subscriber callback: {e}")
-            
+
             # Publish to Redis channel for other processes
             try:
                 self._redis_client.publish('cognicore:state_changes', json.dumps(state_data))
             except (redis.ConnectionError, redis.TimeoutError) as e:
                 logger.error(f"Failed to publish state change to Redis channel: {e}")
                 # Don't raise here - local state is set, this is just inter-process notification
-            
+
             # Add to persistent state history
             try:
                 history_key = "cognicore:state_history"
@@ -415,9 +414,9 @@ class CogniCore:
             except (redis.ConnectionError, redis.TimeoutError) as e:
                 logger.error(f"Failed to update state history: {e}")
                 # Don't raise here either - state is set, history is just for debugging
-            
-        except (InvalidStateTransitionError, StatePermissionError) as e:
-            # Re-raise validation errors for caller to handle
+
+        except StatePermissionError as e:
+            # Re-raise permission errors for caller to handle
             logger.error(f"State transition failed: {e}")
             raise
         except Exception as e:

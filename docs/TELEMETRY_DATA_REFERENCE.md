@@ -90,12 +90,13 @@
 
 ## Fatigue Scoring Weights
 
-- **Vision Data:** 75% total weight
-  - Eye Aspect Ratio: 50%
-  - Closure Duration: 30%
+- **Vision Data:** 70% total weight
+  - Eye Aspect Ratio: 40%
+  - Closure Duration: 25%
   - Microsleep Count: 15%
+  - Yawning Analysis: 15%
   - Blink Rate: 5%
-- **Cardiovascular Data:** 25% total weight (when available)
+- **Cardiovascular Data:** 30% total weight (when available)
 
 **Fusion Score Thresholds:**
 - **< 0.3:** Active (normal alertness)

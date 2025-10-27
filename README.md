@@ -50,14 +50,15 @@ The system operates through well-defined states managed by CogniCore:
 
 The system combines data from multiple sensors for comprehensive fatigue assessment:
 
-#### Vision Processing (75% weight)
+#### Vision Processing (70% weight)
 
-- **Eye Aspect Ratio (EAR)**: Primary fatigue indicator (50% weight)
-- **Eye Closure Duration**: Safety-critical microsleep detection (30% weight)
+- **Eye Aspect Ratio (EAR)**: Primary fatigue indicator (40% weight)
+- **Eye Closure Duration**: Safety-critical microsleep detection (25% weight)
 - **Microsleep Events**: Count of 1+ second eye closures (15% weight)
+- **Yawning Analysis**: Yawn frequency, duration, and mouth aspect ratio (15% weight)
 - **Blink Patterns**: Behavioral analysis of blink rate (5% weight)
 
-#### Physiological Monitoring (25% weight)
+#### Physiological Monitoring (30% weight)
 
 - **Heart Rate Variability (RMSSD)**: Autonomic nervous system health indicator
 - **Heart Rate Baseline Deviation**: Stress response monitoring

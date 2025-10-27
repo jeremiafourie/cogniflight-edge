@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # CogniFlight Edge - Universal Deployment Script
-# Supports primary (cogniflight.local) and secondary device deployments
+# Supports primary (primary.local) and secondary device deployments
 
 set -euo pipefail
 
@@ -31,10 +31,10 @@ fi
 
 # Deployment mode (primary/secondary/full)
 DEPLOYMENT_MODE=""
-PRIMARY_HOST="cogniflight.local"  # Fixed primary hostname
+PRIMARY_HOST="primary.local"  # Fixed primary hostname
 
 # Service distribution
-# Primary device (cogniflight.local) runs main processing + Redis + Motion Control + Bio Monitor
+# Primary device (primary.local) runs main processing + Redis + Motion Control + Bio Monitor
 PRIMARY_SERVICES=(
     "go_client"
     "predictor"
@@ -97,7 +97,7 @@ parse_deployment_mode() {
     case "${2:-}" in
         --primary)
             DEPLOYMENT_MODE="primary"
-            print_status "Deploying as PRIMARY device (cogniflight.local)"
+            print_status "Deploying as PRIMARY device (primary.local)"
             print_status "Services: go_client, predictor, vision_processor, network_connector, motion_controller, bio_monitor"
             SERVICES=("${PRIMARY_SERVICES[@]}")
             ;;
@@ -112,7 +112,7 @@ parse_deployment_mode() {
             print_status "Testing connection to primary device..."
             if ! ping -c 1 -W 2 "$PRIMARY_HOST" &>/dev/null; then
                 print_warning "Cannot ping $PRIMARY_HOST"
-                print_warning "Ensure primary device is accessible as 'cogniflight.local'"
+                print_warning "Ensure primary device is accessible as 'primary.local'"
             fi
 
             if ! redis-cli -h "$PRIMARY_HOST" -a "13MyFokKaren79." ping &>/dev/null; then
@@ -302,7 +302,7 @@ setup_configuration() {
     else
         REDIS_HOST_CONFIG="localhost"
         if [[ "$DEPLOYMENT_MODE" == "primary" ]]; then
-            DEPLOYMENT_INFO="Primary device (cogniflight.local) - local Redis"
+            DEPLOYMENT_INFO="Primary device (primary.local) - local Redis"
         else
             DEPLOYMENT_INFO="Full installation - local Redis"
         fi
@@ -574,7 +574,7 @@ show_status() {
         echo "  - env_monitor (temperature/humidity/IMU)"
         echo "  - alert_manager (GPIO/RGB LED/alerts)"
         echo ""
-        echo "Primary (cogniflight.local) runs:"
+        echo "Primary (primary.local) runs:"
         echo "  - go_client, predictor, vision_processor"
         echo "  - network_connector, motion_controller, bio_monitor"
     else
@@ -637,17 +637,17 @@ main() {
                 print_status "To deploy secondary devices, run on other Pis:"
                 print_success "sudo ./scripts/deploy.sh install --secondary"
                 echo ""
-                print_status "Ensure this device is accessible as 'cogniflight.local'"
+                print_status "Ensure this device is accessible as 'primary.local'"
                 print_status "You may need to install avahi-daemon if not already installed:"
                 echo "  sudo apt install avahi-daemon"
                 echo ""
                 print_status "Network Configuration:"
-                print_status "- Primary device should be accessible as 'cogniflight.local'"
+                print_status "- Primary device should be accessible as 'primary.local'"
                 print_status "- Redis server running on port 6379 with password authentication"
                 print_status "- Secondary devices will connect to this Redis instance"
                 echo ""
                 print_status "Verify Redis network access with:"
-                echo "  redis-cli -h cogniflight.local -a '13MyFokKaren79.' ping"
+                echo "  redis-cli -h primary.local -a '13MyFokKaren79.' ping"
             elif [[ "$DEPLOYMENT_MODE" == "secondary" ]]; then
                 echo ""
                 print_status "Secondary device deployment complete!"
@@ -701,11 +701,11 @@ main() {
             echo ""
             echo "Installation modes:"
             echo "  $0 install              # Full installation (all services)"
-            echo "  $0 install --primary    # Primary device at cogniflight.local"
-            echo "  $0 install --secondary  # Secondary device (connects to cogniflight.local)"
+            echo "  $0 install --primary    # Primary device at primary.local"
+            echo "  $0 install --secondary  # Secondary device (connects to primary.local)"
             echo ""
             echo "Service distribution:"
-            echo "  Primary (cogniflight.local):"
+            echo "  Primary (primary.local):"
             echo "    - go_client, predictor, vision_processor"
             echo "    - network_connector, motion_controller, bio_monitor"
             echo "    - Redis server with network access"

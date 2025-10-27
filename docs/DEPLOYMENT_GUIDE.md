@@ -18,7 +18,7 @@ sudo ./scripts/deploy.sh install --primary
 - Enables I2C hardware for motion controller
 - Validates PCA9685 PWM controller detection
 - Configures and starts systemd services
-- Sets up primary device as `cogniflight.local`
+- Sets up primary device as `primary.local`
 
 **Services deployed:**
 - `go_client` - Pilot profile management
@@ -40,7 +40,7 @@ sudo ./scripts/deploy.sh install --secondary
 **What it does:**
 - Installs system dependencies
 - Disables local Redis (connects to primary's Redis)
-- Tests connection to primary device at `cogniflight.local`
+- Tests connection to primary device at `primary.local`
 - Creates Python virtual environments
 - Installs Python dependencies
 - Configures and starts systemd services
@@ -121,7 +121,7 @@ sudo ./scripts/validate.sh
 - I2C for servo control
 
 **Secondary Device (Pi 4):**
-- Connects to primary's Redis at `cogniflight.local:6379`
+- Connects to primary's Redis at `primary.local:6379`
 - Handles environmental sensing
 - GPIO hardware for alerts
 
@@ -157,7 +157,7 @@ sudo journalctl -u cogniflight@vision_processor -f
 
 ### Check Redis Connection
 ```bash
-redis-cli -h cogniflight.local -a '13MyFokKaren79.' ping
+redis-cli -h primary.local -a '13MyFokKaren79.' ping
 ```
 
 ### Verify I2C Devices
@@ -198,7 +198,7 @@ Removes all systemd services, configuration files, and disables services.
 
 **Network:**
 - Both devices on same local network
-- Primary device accessible as `cogniflight.local`
+- Primary device accessible as `primary.local`
 - Internet connection for cloud telemetry (optional)
 
 **Software:**

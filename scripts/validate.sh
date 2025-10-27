@@ -129,19 +129,19 @@ validate_network() {
 
     if [[ "$DEPLOYMENT_MODE" == "secondary" ]]; then
         # Secondary device should reach primary
-        if ping -c 1 -W 2 cogniflight.local &>/dev/null; then
-            print_success "Can reach primary device (cogniflight.local)"
+        if ping -c 1 -W 2 primary.local &>/dev/null; then
+            print_success "Can reach primary device (primary.local)"
         else
-            print_error "Cannot ping primary device (cogniflight.local)"
+            print_error "Cannot ping primary device (primary.local)"
         fi
     elif [[ "$DEPLOYMENT_MODE" == "primary" ]]; then
-        # Primary device should be resolvable as cogniflight.local
+        # Primary device should be resolvable as primary.local
         hostname_current=$(hostname)
-        if [[ "$hostname_current" == "cogniflight" ]]; then
-            print_success "Hostname is set to 'cogniflight' (resolvable as cogniflight.local)"
+        if [[ "$hostname_current" == "primary" ]]; then
+            print_success "Hostname is set to 'primary' (resolvable as primary.local)"
         else
-            print_warning "Hostname is '$hostname_current' (expected 'cogniflight')"
-            print_status "To fix: sudo hostnamectl set-hostname cogniflight"
+            print_warning "Hostname is '$hostname_current' (expected 'primary')"
+            print_status "To fix: sudo hostnamectl set-hostname primary"
         fi
     fi
 

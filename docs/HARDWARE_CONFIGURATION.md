@@ -5,7 +5,7 @@
 ```mermaid
 graph TB
     subgraph "PRIMARY DEVICE - Raspberry Pi 5"
-        Pi5[Raspberry Pi 5<br/>cogniflight.local]
+        Pi5[Raspberry Pi 5<br/>primary.local]
 
         subgraph "Vision System"
             Camera[Camera Module<br/>CSI Interface<br/>640x360 @ 30fps]

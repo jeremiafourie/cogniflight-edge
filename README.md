@@ -83,7 +83,7 @@ All thresholds are personalized based on individual pilot baselines and preferen
 
 CogniFlight Edge supports optimal two-device deployment for resource distribution:
 
-### Primary Device (Pi 5 - "cogniflight.local")
+### Primary Device (Pi 5 - "primary.local")
 **Processing Services:**
 - `go_client` - Pilot profile management
 - `predictor` - Data fusion and fatigue analysis
@@ -103,7 +103,7 @@ CogniFlight Edge supports optimal two-device deployment for resource distributio
 - `alert_manager` - GPIO alerts (LED, buzzer, vibrator)
 
 **Connection:**
-- Connects to primary's Redis at `cogniflight.local:6379`
+- Connects to primary's Redis at `primary.local:6379`
 - No local Redis instance required
 - Automatic network connectivity verification
 

@@ -4,3 +4,4 @@ adafruit-circuitpython-motor>=3.4.0
 simple-pid>=2.0.0
 redis>=4.5.0
 systemd-python>=234
+lgpio>=0.2.2.0

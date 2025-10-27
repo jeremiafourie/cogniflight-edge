@@ -1,0 +1,34 @@
+[Unit]
+Description=CogniFlight Go %i Service
+After=network-online.target redis-server.service
+Wants=network-online.target
+PartOf=cogniflight.target
+
+[Service]
+Type=simple
+User={{USER}}
+Group={{USER}}
+WorkingDirectory={{PROJECT_ROOT}}/services/%i
+EnvironmentFile=-{{PROJECT_ROOT}}/services/%i/.env
+EnvironmentFile={{CONFIG_DIR}}/config.env
+EnvironmentFile=-{{CONFIG_DIR}}/config.%i.env
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStart={{PROJECT_ROOT}}/services/%i/%i
+Restart=on-failure
+RestartSec=5
+StartLimitBurst=3
+StandardOutput=journal
+StandardError=journal
+
+# Resource limits - Optimized for Go services
+MemoryMax=512M
+CPUQuota=30%
+CPUWeight=250
+Nice=10
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=false
+
+[Install]
+WantedBy=cogniflight.target

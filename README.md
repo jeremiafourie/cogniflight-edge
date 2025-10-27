@@ -50,14 +50,15 @@ The system operates through well-defined states managed by CogniCore:
 
 The system combines data from multiple sensors for comprehensive fatigue assessment:
 
-#### Vision Processing (75% weight)
+#### Vision Processing (70% weight)
 
-- **Eye Aspect Ratio (EAR)**: Primary fatigue indicator (50% weight)
-- **Eye Closure Duration**: Safety-critical microsleep detection (30% weight)
+- **Eye Aspect Ratio (EAR)**: Primary fatigue indicator (40% weight)
+- **Eye Closure Duration**: Safety-critical microsleep detection (25% weight)
 - **Microsleep Events**: Count of 1+ second eye closures (15% weight)
+- **Yawning Analysis**: Yawn frequency, duration, and mouth aspect ratio (15% weight)
 - **Blink Patterns**: Behavioral analysis of blink rate (5% weight)
 
-#### Physiological Monitoring (25% weight)
+#### Physiological Monitoring (30% weight)
 
 - **Heart Rate Variability (RMSSD)**: Autonomic nervous system health indicator
 - **Heart Rate Baseline Deviation**: Stress response monitoring
@@ -106,16 +107,21 @@ CogniFlight Edge supports optimal two-device deployment for resource distributio
 - No local Redis instance required
 - Automatic network connectivity verification
 
-### Deployment Commands
+### Deployment
+
+For detailed deployment instructions, system validation, and troubleshooting, see **[docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)**.
+
+**Quick Start:**
 ```bash
 # Primary device (Pi 5)
-sudo ./deploy.sh install --primary
+sudo ./scripts/deploy.sh install --primary
 
 # Secondary device(s) (Pi 4)
-sudo ./deploy.sh install --secondary
-```
+sudo ./scripts/deploy.sh install --secondary
 
-The deployment script automatically configures networking, hardware dependencies, and service distribution based on the target device role.
+# Validate deployment
+sudo ./scripts/validate.sh
+```
 
 ## Directory Structure
 

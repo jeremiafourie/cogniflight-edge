@@ -1,0 +1,38 @@
+[Unit]
+Description=CogniFlight %i Service
+After=network.target redis-server.service sysinit.target
+Wants=network.target
+PartOf=cogniflight.target
+
+[Service]
+Type=notify
+User={{USER}}
+Group={{USER}}
+WorkingDirectory={{PROJECT_ROOT}}/services/%i
+Environment="PATH={{PROJECT_ROOT}}/services/%i/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="PYTHONPATH={{PROJECT_ROOT}}"
+EnvironmentFile={{CONFIG_DIR}}/config.env
+EnvironmentFile=-{{CONFIG_DIR}}/config.%i.env
+# Add delay for hardware initialization (especially camera for vision_processor)
+ExecStartPre=/bin/sleep 3
+ExecStart={{PROJECT_ROOT}}/services/%i/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+WatchdogSec=30
+StartLimitBurst=3
+StandardOutput=journal
+StandardError=journal
+
+# Security settings
+NoNewPrivileges=true
+PrivateTmp=false
+
+# Resource limits (can be overridden per service)
+MemoryMax=2G
+CPUQuota=80%
+
+# GPIO/Hardware access for specific services
+SupplementaryGroups=gpio i2c spi bluetooth
+
+[Install]
+WantedBy=cogniflight.target

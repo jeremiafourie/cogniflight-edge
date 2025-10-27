@@ -1,0 +1,7 @@
+[Unit]
+Description=CogniFlight Edge System
+After=multi-user.target redis-server.service
+Wants=redis-server.service
+
+[Install]
+WantedBy=multi-user.target

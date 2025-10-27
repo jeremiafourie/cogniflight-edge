@@ -1,5 +1,6 @@
 # For DHT22 temperature/humidity sensor
 adafruit-circuitpython-dht
+Adafruit-Blinka
 board
 lgpio
 RPi.GPIO
@@ -8,7 +9,7 @@ imusensor
 numpy
 easydict
 adafruit-circuitpython-bmp280
-smbus
+smbus2
 # For CogniCore communication
 redis
 systemd-python

@@ -27,7 +27,7 @@ from pathlib import Path
 import board
 import busio
 import adafruit_dht
-import smbus
+import smbus2 as smbus
 from imusensor.MPU9250 import MPU9250
 import adafruit_bmp280
 import systemd.daemon

@@ -182,12 +182,12 @@ install_dependencies() {
     apt update
     apt install -y \
         python3 python3-pip python3-venv python3-dev \
-        build-essential cmake pkg-config gfortran \
+        build-essential cmake pkg-config gfortran swig \
         redis-server \
         libjpeg-dev libpng-dev libtiff-dev \
         libhdf5-dev libopenblas-dev \
-        python3-lgpio python3-gpiozero \
-        i2c-tools \
+        python3-lgpio python3-gpiozero liblgpio-dev \
+        i2c-tools python3-smbus \
         libsystemd-dev libcap-dev \
         libgl1 libglib2.0-0 \
         python3-redis
@@ -214,8 +214,8 @@ install_dependencies() {
     systemctl enable avahi-daemon
     systemctl start avahi-daemon
 
-    # Enable I2C for motion controller (primary and full installations)
-    if [[ "$DEPLOYMENT_MODE" == "primary" ]] || [[ "$DEPLOYMENT_MODE" == "full" ]]; then
+    # Enable I2C for motion controller (primary/full) and env_monitor (secondary/full)
+    if [[ "$DEPLOYMENT_MODE" == "primary" ]] || [[ "$DEPLOYMENT_MODE" == "full" ]] || [[ "$DEPLOYMENT_MODE" == "secondary" ]]; then
         # Enable I2C in boot config
         if ! grep -q "dtparam=i2c_arm=on" /boot/config.txt 2>/dev/null && [[ -f /boot/config.txt ]]; then
             echo "dtparam=i2c_arm=on" >> /boot/config.txt
@@ -469,6 +469,16 @@ create_virtualenvs() {
             if [[ -f "$service_dir/requirements.txt" ]]; then
                 print_status "Installing dependencies for $service..."
                 sudo -u "$TARGET_USER" "$service_dir/.venv/bin/pip" install -r "$service_dir/requirements.txt"
+
+                # Create smbus compatibility layer for packages that import smbus instead of smbus2
+                if grep -q "smbus2" "$service_dir/requirements.txt"; then
+                    SITE_PACKAGES="$service_dir/.venv/lib/python*/site-packages"
+                    cat > $SITE_PACKAGES/smbus.py << 'EOF'
+# Compatibility layer for smbus -> smbus2
+from smbus2 import *
+EOF
+                    print_status "Created smbus compatibility layer for $service"
+                fi
             fi
             print_success "Setup complete for $service"
         fi

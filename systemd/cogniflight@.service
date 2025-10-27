@@ -1,6 +1,6 @@
 [Unit]
 Description=CogniFlight %i Service
-After=network.target redis-server.service sysinit.target
+After=network.target sysinit.target
 Wants=network.target
 PartOf=cogniflight.target
 

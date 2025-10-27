@@ -110,21 +110,61 @@ parse_deployment_mode() {
 
             # Test connection to primary
             print_status "Testing connection to primary device..."
+
+            # Test 1: Ping connectivity
             if ! ping -c 1 -W 2 "$PRIMARY_HOST" &>/dev/null; then
-                print_warning "Cannot ping $PRIMARY_HOST"
-                print_warning "Ensure primary device is accessible as 'primary.local'"
+                print_error "Cannot ping $PRIMARY_HOST"
+                print_status "Troubleshooting steps:"
+                print_status "  1. Verify both devices are on the same network"
+                print_status "  2. Try ping with IP: ping 10.0.0.107"
+                print_status "  3. Check primary device is online"
+                print_status "  4. If hostname fails, add to /etc/hosts: echo '10.0.0.107 primary.local' | sudo tee -a /etc/hosts"
+                exit 1
+            fi
+            print_success "Network connectivity OK"
+
+            # Test 2: Check if redis-cli is installed
+            if ! command -v redis-cli &> /dev/null; then
+                print_status "Installing redis-tools for connection testing..."
+                apt update -qq
+                apt install -y redis-tools
             fi
 
-            if ! redis-cli -h "$PRIMARY_HOST" -a "13MyFokKaren79." ping &>/dev/null; then
-                print_warning "Cannot connect to Redis on $PRIMARY_HOST"
-                print_warning "Ensure primary device has Redis configured for network access"
-                read -p "Continue anyway? (y/n): " -n 1 -r
+            # Test 3: Port connectivity
+            print_status "Testing Redis port connectivity..."
+            if timeout 3 bash -c "echo > /dev/tcp/$PRIMARY_HOST/6379" 2>/dev/null; then
+                print_success "Port 6379 is accessible"
+            else
+                print_error "Cannot connect to port 6379 on $PRIMARY_HOST"
+                print_status "On PRIMARY device, verify Redis is listening on network:"
+                print_status "  sudo netstat -tlnp | grep 6379"
+                print_status "  (Should show: 0.0.0.0:6379)"
+                print_status "On PRIMARY device, check Redis config:"
+                print_status "  sudo grep '^bind' /etc/redis/redis.conf"
+                print_status "  (Should show: bind 0.0.0.0)"
+                exit 1
+            fi
+
+            # Test 4: Redis authentication
+            print_status "Testing Redis authentication..."
+            REDIS_RESPONSE=$(redis-cli -h "$PRIMARY_HOST" -a "13MyFokKaren79." ping 2>&1)
+            if echo "$REDIS_RESPONSE" | grep -q "PONG"; then
+                print_success "Redis connection successful!"
+            else
+                print_error "Cannot authenticate with Redis on $PRIMARY_HOST"
+                print_status "Response: $REDIS_RESPONSE"
+                print_status ""
+                print_status "On PRIMARY device, verify Redis password:"
+                print_status "  sudo grep '^requirepass' /etc/redis/redis.conf"
+                print_status "  (Should show: requirepass 13MyFokKaren79.)"
+                print_status "On PRIMARY device, test locally:"
+                print_status "  redis-cli -h localhost -a '13MyFokKaren79.' ping"
+                print_status ""
+                read -p "Continue deployment anyway? (y/n): " -n 1 -r
                 echo
                 if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                     exit 1
                 fi
-            else
-                print_success "Connected to primary device's Redis at $PRIMARY_HOST"
             fi
             ;;
         *)

@@ -106,16 +106,21 @@ CogniFlight Edge supports optimal two-device deployment for resource distributio
 - No local Redis instance required
 - Automatic network connectivity verification
 
-### Deployment Commands
+### Deployment
+
+For detailed deployment instructions, system validation, and troubleshooting, see **[docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)**.
+
+**Quick Start:**
 ```bash
 # Primary device (Pi 5)
-sudo ./deploy.sh install --primary
+sudo ./scripts/deploy.sh install --primary
 
 # Secondary device(s) (Pi 4)
-sudo ./deploy.sh install --secondary
-```
+sudo ./scripts/deploy.sh install --secondary
 
-The deployment script automatically configures networking, hardware dependencies, and service distribution based on the target device role.
+# Validate deployment
+sudo ./scripts/validate.sh
+```
 
 ## Directory Structure
 

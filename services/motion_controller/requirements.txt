@@ -1,0 +1,6 @@
+adafruit-circuitpython-pca9685>=1.0.0
+adafruit-circuitpython-servokit>=1.3.0
+adafruit-circuitpython-motor>=3.4.0
+simple-pid>=2.0.0
+redis>=4.5.0
+systemd-python>=234

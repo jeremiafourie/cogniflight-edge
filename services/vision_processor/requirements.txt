@@ -1,0 +1,17 @@
+# Computer vision and AI
+opencv-python-headless
+numpy
+mediapipe
+insightface
+onnxruntime
+
+# Image processing
+Pillow
+
+# Scientific computing
+scipy
+scikit-learn
+
+# For CogniCore communication
+redis
+systemd-python

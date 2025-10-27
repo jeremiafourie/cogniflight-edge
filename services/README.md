@@ -30,21 +30,25 @@ The `services` directory contains all the microservices that make up the CogniFl
 
 ### Core Processing Services
 
-#### **Alert Manager** (`alert_manager/`) - Pure Reactive Display
+#### **Alert Manager** (`alert_manager/`) - Pure Reactive Control
 
-- **Function**: LCD display management via system state subscriptions only
+- **Function**: RGB LED and GPIO control via system state subscriptions only
 - **Input**: System state changes only (no other data sources)
-- **Output**: 16x2 LCD display with message deduplication
-- **Hardware**: I2C LCD with PCF8574 backpack
-- **Design**: No polling, purely event-driven LCD updates
+- **Output**: RGB LED color states and GPIO device control
+- **Hardware**: RGB LED, buzzer, and vibrator motor
+- **Design**: No polling, purely event-driven hardware control
 
-#### **Vision Processing** (`vision_processing/`) - Reactive Camera Management
+#### **Vision Processor** (`vision_processor/`) - Unified Authentication & Monitoring
 
-- **Function**: Real-time facial landmark analysis when pilot is present
-- **Input**: Camera frames (640x360 @ 30fps), pilot presence subscriptions
-- **Output**: EAR/MAR scores, blink/yawn detection
-- **Technology**: MediaPipe, OpenCV, rpicam-vid
-- **Reactive Design**: Camera only runs when pilot detected, automatic resource cleanup
+- **Function**: Dual-mode service for pilot authentication and fatigue monitoring in single camera stream
+- **Modes**:
+  - Authentication: Face recognition when no pilot active (InsightFace)
+  - Monitoring: Real-time fatigue analysis when pilot authenticated (MediaPipe)
+- **Input**: Camera frames (640x360 @ 30fps), pilot embeddings from Redis
+- **Output**: Authentication requests, EAR/MAR scores, microsleep detection, face tracking
+- **Technology**: InsightFace buffalo_s, MediaPipe face mesh, OpenCV, rpicam-vid
+- **Design**: Single camera ownership, automatic mode switching between authentication and monitoring, zero handover delays
+- **Deployment**: Primary device (Pi 5)
 
 #### **Predictor** (`predictor/`) - Integrated Data Fusion & Analysis
 
@@ -56,38 +60,46 @@ The `services` directory contains all the microservices that make up the CogniFl
 
 ### Identification and Profile Services
 
-#### **Face Recognition** (`face_recognition/`) - Camera Owner and Pilot Detection
-
-- **Function**: Pilot identification using facial recognition, camera resource management
-- **Input**: Camera frames (640x360 @ 15fps), pilot face embeddings
-- **Output**: Pilot identification requests, security alerts, camera handoff
-- **Technology**: InsightFace buffalo_s model, processes every 5th frame (3fps processing)
-- **Resource Management**: Releases camera to vision processing when pilot active
-
-#### **HTTPS Client** (`https_client/`) - Reactive Profile Management
+#### **Go Client** (`go_client/`) - Reactive Profile Management
 
 - **Function**: Pilot profile fetching with persistent storage
-- **Input**: Pilot ID requests from face recognition
-- **Output**: Pilot profiles published to CogniCore, persistent storage
+- **Input**: Pilot ID requests from vision processor
+- **Output**: Pilot profiles published to CogniCore, face embeddings to Redis
 - **Features**: Cloud API integration with persistent Redis storage, reactive profile loading
+- **Technology**: Go implementation with efficient concurrent processing
 
 ### Monitoring Services
 
-#### **HR Monitor** (`hr_monitor/`) - Reactive BLE Connection
+#### **Bio Monitor** (`bio_monitor/`) - Dual Sensor Biometric Monitoring
 
-- **Function**: Heart rate monitoring activated only when pilot is present
-- **Input**: Pilot presence subscriptions, BLE heart rate sensor data
-- **Output**: Real-time heart rate measurements when pilot active
-- **Technology**: Bleak async BLE library with reactive connection management
-- **Reactive Design**: BLE connection only established when pilot detected, automatic cleanup
+- **Function**: Heart rate monitoring (BLE) AND alcohol detection (GPIO sensor)
+- **Input**: BLE heart rate sensor data (XOSS X2), MQ3 alcohol sensor via GPIO 18
+- **Output**: Real-time heart rate with HRV/RMSSD metrics, immediate alcohol detection events
+- **Technology**: Bleak async BLE, gpiozero GPIO library, advanced HRV analysis
+- **Dual Design**:
+  - **HR Monitoring**: BLE connection to XOSS X2 with baseline tracking and stress index
+  - **Alcohol Detection**: Continuous GPIO monitoring (30s warmup, 2s debounce, inverted logic)
+- **Data Publishing**: `hr_sensor` hash for HR data, `alcohol_detected` hash for instant alcohol events
+- **Deployment**: Primary device (Pi 5) for direct BLE access to pilot
 
 #### **Environment Monitor** (`env_monitor/`) - Guaranteed Environmental Monitoring
 
 - **Function**: Robust environmental sensor data collection with guaranteed data publishing
-- **Input**: DHT22 temperature and humidity sensor with 15-attempt retry logic
-- **Output**: Environmental telemetry data via CogniCore every 2 seconds (always)
-- **Hardware**: DHT22 on GPIO pin 4 with 0.5Hz sampling (2-second intervals)
+- **Input**: DHT22 temperature/humidity sensor, GY-91 IMU (MPU9250 + BMP280)
+- **Output**: Environmental telemetry data via CogniCore every 1 second (always)
+- **Hardware**: DHT22 on GPIO pin 6, GY-91 on I2C Bus 1 with 1Hz sampling (1-second intervals)
 - **Design**: Continuous operation with stale data fallback for 100% data availability
+- **Deployment**: Secondary device (Pi 4)
+
+#### **Motion Controller** (`motion_controller/`) - Servo-Based Camera Tracking
+
+- **Function**: Automated camera positioning system that tracks pilot head movements
+- **Input**: Face detection data from vision_processor (head position coordinates)
+- **Output**: Servo motor control signals for pan/tilt camera positioning
+- **Hardware**: PCA9685 PWM driver with dual SG90 servos (I2C Bus 1)
+- **Features**: Smooth motion interpolation, angle-to-pulse width conversion, safety limits
+- **Design**: Translates head position into servo movements for optimal camera angles
+- **Deployment**: Primary device (Pi 5)
 
 ### Data Management Services
 
@@ -104,8 +116,8 @@ The `services` directory contains all the microservices that make up the CogniFl
 ### Reactive Publisher-Subscriber Pattern
 
 ```python
-# Reactive Publisher (Vision Processing)
-core = CogniCore("vision_processing")
+# Reactive Publisher (Vision Processor)
+core = CogniCore("vision_processor")
 # Only publishes when pilot is active
 if self.pilot_profile:
     core.publish_data("vision", {"avg_ear": 0.25, "mar": 0.05})
@@ -121,12 +133,12 @@ def on_vision_data(hash_name, data):
 
 core.subscribe_to_data("vision", on_vision_data)
 
-# Pilot Activation Subscriber (HR Monitor)
+# Pilot Activation Subscriber (Bio Monitor)
 def on_pilot_change(hash_name, data):
     pilot_id = data.get('pilot_id') if data else None
     is_active = data.get('active', False) if data else False
 
-    if pilot_id and is_active and not hr_monitor_running:
+    if pilot_id and is_active and not bio_monitor_running:
         start_ble_connection()  # Immediate activation
 
 # Subscribe to all pilot changes
@@ -189,8 +201,10 @@ import time
 import systemd.daemon
 from pathlib import Path
 
-# Add project root to path
-sys.path.append(str(Path(__file__).parent.parent))
+# Add project root to path for imports (deployment flexible)
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from CogniCore import CogniCore
 
@@ -251,10 +265,12 @@ def robust_service_operation():
 
 ### Hardware Dependencies
 
-- **Camera Services**: Raspberry Pi camera module
-- **Display Services**: I2C LCD display
-- **Sensor Services**: GPIO-connected sensors
-- **BLE Services**: Bluetooth Low Energy capability
+- **Camera Services**: Raspberry Pi camera module (Primary device - Pi 5)
+- **Alert Services**: GPIO hardware control - RGB LED, buzzer, vibrator (Secondary device - Pi 4)
+- **Environmental Sensors**: DHT22 (GPIO 6), GY-91 IMU (I2C Bus 1) (Secondary device - Pi 4)
+- **BLE Services**: Bluetooth Low Energy for XOSS X2 HR monitor (Primary device - Pi 5)
+- **Alcohol Detection**: MQ3 sensor module via GPIO 18 (inverted logic, 5V powered) (Primary device - Pi 5)
+- **Motion Control**: PCA9685 PWM driver (I2C Bus 1) with SG90 servos (Primary device - Pi 5)
 
 ### Software Dependencies
 
@@ -266,16 +282,18 @@ def robust_service_operation():
 
 ### Reactive Real-time Services
 
-- **Vision Processing**: 30fps when pilot active (0fps when idle)
+- **Vision Processor**:
+  - Authentication mode: 6fps face recognition (every 5th frame at 30fps)
+  - Monitoring mode: 30fps fatigue analysis (every frame)
+  - Automatic mode switching based on pilot authentication status
 - **Predictor**: 10Hz continuous data fusion and analysis
-- **Alert Manager**: <50ms state change response (LCD only)
-- **HR Monitor**: Real-time BLE streaming when pilot present
-- **Network Connector**: Event-driven telemetry (max 0.5Hz due to throttling)
+- **Alert Manager**: <50ms state change response (GPIO hardware control)
+- **Bio Monitor**: Real-time BLE streaming with HRV/RMSSD analysis
+- **Network Connector**: Event-driven telemetry with 2-second throttling (0.5Hz max)
 
 ### On-Demand Services
 
-- **Face Recognition**: 3fps processing (15fps camera, every 5th frame)
-- **HTTPS Client**: Reactive profile fetching on pilot detection
+- **Go Client**: Reactive profile fetching on pilot detection
 - **Predictor**: 2-second interval sliding window analysis
 
 ### Resource Usage

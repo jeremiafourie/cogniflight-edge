@@ -15,18 +15,20 @@ This edge computing solution operates independently on embedded hardware (Raspbe
 
 ### Output Systems
 
-- **LCD Display**: 16x2 character display for immediate visual alerts
-- **Audio/Visual Alerts**: Multi-priority alert system
+- **Audio/Visual Alerts**: Multi-priority alert system with RGB LED, buzzer, and vibrator
+- **Camera Motion Control**: Real-time pan/tilt servo tracking for face centering
 - **Data Logging**: Integrated Redis-based logging system
 - **Telemetry**: MQTT-based cloud reporting (when connected)
+- **State Broadcasting**: Real-time system state updates via Redis pub/sub
 
 ## Core Technologies
 
 - **CogniCore**: Redis-based communication library for service coordination
 - **Computer Vision**: MediaPipe for facial landmark detection
-- **Face Recognition**: InsightFace for pilot identification
+- **Authentication**: InsightFace for pilot identification
+- **Motion Control**: PCA9685 PWM controller for pan/tilt servo tracking
 - **Biometrics**: Bluetooth Low Energy heart rate monitoring
-- **Edge Computing**: Raspberry Pi with optimized Python services
+- **Edge Computing**: Distributed Raspberry Pi architecture with optimized Python and Go services
 
 ## System States
 
@@ -38,8 +40,9 @@ The system operates through well-defined states managed by CogniCore:
 4. **ALERT_MILD** - Early fatigue warning (fusion score ~0.3)
 5. **ALERT_MODERATE** - Escalated fatigue warning (fusion score ~0.6)
 6. **ALERT_SEVERE** - Critical fatigue alert (fusion score ~0.8)
-7. **SYSTEM_ERROR** - Service error or malfunction
-8. **SYSTEM_CRASHED** - Critical system failure, watchdog unable to recover
+7. **ALCOHOL_DETECTED** - Alcohol vapor detected by MQ3 sensor (critical safety alert)
+8. **SYSTEM_ERROR** - Service error or malfunction
+9. **SYSTEM_CRASHED** - Critical system failure, watchdog unable to recover
 
 ## Fatigue Detection Algorithm
 
@@ -75,6 +78,45 @@ The system combines data from multiple sensors for comprehensive fatigue assessm
 
 All thresholds are personalized based on individual pilot baselines and preferences.
 
+## Deployment Architecture
+
+CogniFlight Edge supports optimal two-device deployment for resource distribution:
+
+### Primary Device (Pi 5 - "cogniflight.local")
+**Processing Services:**
+- `go_client` - Pilot profile management
+- `predictor` - Data fusion and fatigue analysis
+- `vision_processor` - Unified authentication and fatigue monitoring (dual-mode)
+- `network_connector` - Telemetry and cloud communication
+- `motion_controller` - Camera pan/tilt servo control
+- `bio_monitor` - Bluetooth heart rate and HRV monitoring
+
+**Infrastructure:**
+- Redis server with network access and authentication
+- I2C hardware for motion control (PCA9685 PWM driver)
+- Camera module for authentication and monitoring
+
+### Secondary Device(s) (Pi 4)
+**Monitoring Services:**
+- `env_monitor` - Temperature and humidity sensing
+- `alert_manager` - GPIO alerts (LED, buzzer, vibrator)
+
+**Connection:**
+- Connects to primary's Redis at `cogniflight.local:6379`
+- No local Redis instance required
+- Automatic network connectivity verification
+
+### Deployment Commands
+```bash
+# Primary device (Pi 5)
+sudo ./deploy.sh install --primary
+
+# Secondary device(s) (Pi 4)
+sudo ./deploy.sh install --secondary
+```
+
+The deployment script automatically configures networking, hardware dependencies, and service distribution based on the target device role.
+
 ## Directory Structure
 
 ```
@@ -82,14 +124,14 @@ cogniflight-edge/
 ├── CogniCore/           # Redis-based communication library
 ├── docs/                # Project documentation
 ├── services/            # Microservices for specific functions
-│   ├── alert_manager/   # LCD display and alert coordination
-│   ├── env_monitor/     # Environmental sensor monitoring
-│   ├── face_recognition/# Pilot identification system
-│   ├── hr_monitor/      # Heart rate monitoring via BLE
-│   ├── https_client/    # Pilot profile management
+│   ├── alert_manager/   # RGB LED and GPIO alert coordination
+│   ├── bio_monitor/     # Heart rate monitoring and alcohol detection
+│   ├── env_monitor/     # Environmental sensor monitoring (GY-91, DHT22)
+│   ├── go_client/       # Pilot profile management (Go implementation)
+│   ├── motion_controller/# Camera pan/tilt servo control
 │   ├── network_connector/# Telemetry and cloud communication
 │   ├── predictor/       # Data fusion, fatigue prediction and alerting
-│   └── vision_processing/# Computer vision and landmark detection
+│   └── vision_processor/# Unified authentication and fatigue monitoring
 └── scripts/             # Utility scripts and test programs
 ```
 
@@ -98,10 +140,11 @@ cogniflight-edge/
 ### Advanced Sensor Integration
 
 - **16 Sensor Data Fields**: Comprehensive monitoring across physiological, environmental, and behavioral metrics
-- **Real-time HR Monitoring**: BLE heart rate sensor with HRV analysis and stress detection
-- **Environmental Monitoring**: Temperature and humidity sensing with comfort analysis
+- **Real-time Bio Monitoring**: XOSS X2 HR Bluetooth monitor with HRV analysis and stress detection
+- **Alcohol Detection**: MQ3 sensor for alcohol vapor detection with inverted logic handling
+- **Environmental Monitoring**: GY-91 IMU sensor (MPU9250 + BMP280) and DHT22 temperature/humidity sensing
 - **Computer Vision**: 468-point facial landmark detection with microsleep monitoring
-- **Biometric Security**: Face recognition with pilot identification and intrusion detection
+- **Biometric Security**: Authentication with pilot identification and intrusion detection
 
 ### Real-time Reactive Processing
 
@@ -111,7 +154,7 @@ cogniflight-edge/
 - **Instant Alerts**: Sub-second response via Redis keyspace notifications
 - **Zero-Latency Activation**: Services respond to pilot changes within milliseconds
 - **Robust Error Recovery**: Watchdog mechanisms prevent silent service failures
-- **Camera Resource Management**: Automatic handover between face recognition and vision processing
+- **Camera Resource Management**: Automatic handover between authenticator and vision processing
 
 ### Offline Operation
 
@@ -121,11 +164,13 @@ cogniflight-edge/
 
 ### Hardware Integration
 
-- **Camera**: rpicam-vid integration with robust handover mechanisms
-- **BLE Sensors**: Heart rate monitor support via Bleak
-- **I2C Display**: 16x2 LCD with PCF8574 I2C backpack
-- **Environmental Sensors**: DHT22 temperature/humidity monitoring
-- **Resource Management**: Automatic camera resource coordination between services
+- **Camera**: rpicam-vid integration with unified dual-mode processing (Pi 5)
+- **Pan/Tilt Control**: PCA9685 PWM driver with SG90 servos for camera tracking (Pi 5)
+- **BLE Sensors**: XOSS X2 heart rate monitor support via Bleak (Pi 5)
+- **GPIO Outputs**: RGB LED, buzzer, and vibrator for multi-sensory alerts (Pi 4)
+- **Environmental Sensors**: GY-91 IMU sensor and DHT22 temperature/humidity monitoring (Pi 4)
+- **Alcohol Detection**: MQ3 gas sensor for alcohol vapor detection (Pi 5)
+- **Resource Management**: Single camera ownership eliminates handover complexity
 
 ### Personalization
 
@@ -143,7 +188,7 @@ Each service operates as an independent systemd unit with **event-driven reactiv
 - **Resource Efficiency**: Camera/sensors only active when pilot present
 - **Systemd Watchdog**: Native systemd service monitoring and automatic restart
 - **Error Handling**: Graceful degradation and recovery with systemd monitoring
-- **Camera Handover**: Seamless transition between face recognition and vision processing
+- **Unified Vision Processing**: Single service handles both authentication and monitoring
 - **Robustness**: Native systemd failure detection and automatic recovery
 - **Centralized Logging**: All events logged through CogniCore
 
@@ -152,14 +197,14 @@ Each service operates as an independent systemd unit with **event-driven reactiv
 - **Instant Activation**: Services start processing immediately when pilot detected
 - **Automatic Cleanup**: Resources released when pilot leaves
 - **Event Throttling**: Network telemetry throttled to prevent spam (2-second minimum)
-- **Smart Scheduling**: Camera only runs during active monitoring
+- **Smart Mode Switching**: Camera automatically switches between authentication and monitoring
 - **Fault Tolerance**: Watchdog mechanisms detect and recover from silent failures
-- **Camera Coordination**: Proper resource timing prevents conflicts between services
+- **Zero Handover Delays**: Unified vision service eliminates camera handover timing issues
 - **Retry Logic**: Robust error recovery with exponential backoff
 
 ### Critical Flow Notes
 
-- **HTTPS Client**: Sets pilot profile but does NOT automatically set `MONITORING_ACTIVE` state
+- **Go Client**: Sets pilot profile but does NOT automatically set `MONITORING_ACTIVE` state
 - **Predictor Responsibility**: Only the predictor service sets `MONITORING_ACTIVE` based on fatigue analysis
 - **Profile Dependencies**: Services may fail if pilot profiles are deleted and server is offline
 - **State Transitions**: System stays in `scanning` until predictor determines fatigue state

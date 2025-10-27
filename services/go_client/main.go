@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/RoundRobinHood/cogniflight-cloud/backend/client"
 	_ "github.com/joho/godotenv/autoload"
@@ -56,6 +57,7 @@ func main() {
 		DB:       redis_db,
 	})
 
+	go SyncThread(rdb, APIConfig{api_username, api_password, api_url}, 5*time.Minute)
 	sub := rdb.PSubscribe(context.Background(), "__keyspace@0__:cognicore:data:pilot_id_request")
 
 	log.Println("Awaiting incoming messages...")

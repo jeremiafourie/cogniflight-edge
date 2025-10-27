@@ -147,22 +147,29 @@ A comprehensive, multi-modal fatigue detection system that:
 | **Category** | **Technology** | **Purpose** |
 |-------------|----------------|-------------|
 | **Architecture** | Service-Oriented Architecture (SOA) | Microservices with loose coupling |
-| **Frontend** | React | Interactive web dashboard |
+| **Frontend** | React 19 | Interactive web dashboard |
 | | JavaScript/TypeScript | UI logic |
-| | WebSocket Client | Command interface connection |
+| | WebSocket Client | Command interface connection (MessagePack) |
+| | Recharts | Data visualization and charts |
+| | Lucide React | Icon library |
 | **Backend** | Go | Primary backend language |
 | | Gin Web Framework | HTTP routing & WebSocket upgrade |
 | | Cookie-based Sessions | Authentication (sessid, 1-hour) |
 | | WebSocket Server | Command interface (`/cmd-socket`) |
+| | MessagePack | Binary serialization for WebSocket |
 | | GridFS (MongoDB) | Virtual filesystem storage |
+| | MQTT Client | Subscribes to telemetry topics |
 | **ML Engine** | Python | Separate ML service |
 | | InsightFace | Face embedding generation |
 | | JSON-RPC | Inter-service communication |
 | | Unix Socket | Backend ↔ ML communication |
-| **Databases** | MongoDB | Pilot profiles, virtual filesystem (GridFS) |
-| | InfluxDB | Time-series telemetry data |
-| **Messaging** | Mosquitto MQTT | Message broker (TLS secured) |
-| | Telegraf | MQTT → InfluxDB pipeline |
+| **Databases** | MongoDB 8.0 | Pilot profiles, virtual filesystem (GridFS) |
+| | | Collection: vfs (with JSON schema validation) |
+| | InfluxDB 2.7 | Time-series telemetry data |
+| | | Bucket: telegraf, Organization: cogniflight |
+| **Messaging** | Mosquitto MQTT | Message broker (TLS secured, Port 8883) |
+| | go-auth Plugin | HTTP-based MQTT authentication |
+| | Telegraf | MQTT → InfluxDB pipeline (subscribes all topics) |
 | **Deployment** | Docker | Containerization |
 | | Docker Compose | SOA orchestration (7 services) |
 | **Security** | TLS 1.2+ | Encryption in transit |
@@ -346,10 +353,10 @@ flowchart TD
 
     Fusion --> Classify{Fatigue<br/>Level?}
 
-    Classify -->|Score < 0.3| Active[State: MONITORING_ACTIVE<br/>Continue Monitoring]
-    Classify -->|0.3-0.6| Mild[State: ALERT_MILD<br/>Yellow LED + Soft Beep]
-    Classify -->|0.6-0.8| Moderate[State: ALERT_MODERATE<br/>Orange LED + Pulse Beep]
-    Classify -->|Score > 0.8| Severe[State: ALERT_SEVERE<br/>Red LED + Loud Buzzer]
+    Classify -->|Score < 0.25| Active[State: MONITORING_ACTIVE<br/>Continue Monitoring]
+    Classify -->|0.25-0.50| Mild[State: ALERT_MILD<br/>Yellow LED + Soft Beep]
+    Classify -->|0.50-0.75| Moderate[State: ALERT_MODERATE<br/>Orange LED + Pulse Beep]
+    Classify -->|Score > 0.75| Severe[State: ALERT_SEVERE<br/>Red LED + Loud Buzzer]
 
     Active --> Track
     Mild --> Track
@@ -385,10 +392,10 @@ flowchart TD
 |-----------|-------------|-------------|
 | **SCANNING** | System start / Pilot deauth | Search for faces, display "Cabin Empty" |
 | **INTRUDER_DETECTED** | Unknown face detected | Alert security, remain in scanning mode |
-| **MONITORING_ACTIVE** | Pilot authenticated, Score < 0.3 | Collect data, track face, green LED |
-| **ALERT_MILD** | Fatigue score 0.3-0.6 | Yellow LED, soft beep, continue monitoring |
-| **ALERT_MODERATE** | Fatigue score 0.6-0.8 | Orange LED, pulse beep, vibration |
-| **ALERT_SEVERE** | Fatigue score > 0.8 | Red LED, loud buzzer, strong vibration |
+| **MONITORING_ACTIVE** | Pilot authenticated, Score < 0.25 | Collect data, track face, green LED |
+| **ALERT_MILD** | Fatigue score 0.25-0.50 | Yellow LED, soft beep, continue monitoring |
+| **ALERT_MODERATE** | Fatigue score 0.50-0.75 | Orange LED, pulse beep, vibration |
+| **ALERT_SEVERE** | Fatigue score > 0.75 | Red LED, loud buzzer, strong vibration |
 | **ALCOHOL_DETECTED** | MQ3 sensor triggered | Critical alert, red LED, continuous alarm |
 
 **Duration:** 2 minutes
@@ -801,7 +808,7 @@ func main() {
     mlConn := jsonrpc2.NewConn(context.Background(), stream, nil)
 
     // Setup routes
-    r.POST("/signup/check-username/:username", signup.CheckUsernameAvailable)
+    r.GET("/signup/check-username/:username", signup.CheckUsernameAvailable)
     r.POST("/signup", signup.Signup)
     r.POST("/login", login.Login)
 
@@ -860,29 +867,47 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 ```
 SOA Components:
 ┌────────────────┐
-│   Frontend     │ (React - Web Dashboard)
+│   Frontend     │ (React 19 - Web Dashboard)
+│   (Port 5173)  │ └─ WebSocket Client (MessagePack)
 └───────┬────────┘
         │ HTTPS/WSS
 ┌───────▼────────┐
-│   Backend      │ (Go/Gin - Command Interface)
-│   ├─ Auth      │ (Cookie-based sessions)
-│   ├─ /cmd-socket│ (WebSocket commands)
-│   └─ GridFS    │ (Virtual filesystem)
+│   Backend      │ (Go/Gin - Command Interface, Port 8080)
+│   ├─ Auth      │ (Cookie-based sessions, /etc/passwd)
+│   ├─ /cmd-socket│ (WebSocket commands, MessagePack)
+│   ├─ GridFS    │ (Virtual filesystem, MongoDB)
+│   └─ MQTT Sub  │ (Subscribes to cogniflight/telemetry/+)
 └──┬──┬──┬───┬──┘
    │  │  │   │
-   │  │  │   └──────► ML Engine (Unix socket JSON-RPC)
-   │  │  │              └─ Face embedding generation
+   │  │  │   └──────────────► ML Engine (Unix socket JSON-RPC)
+   │  │  │                     ├─ generate_face_embedding()
+   │  │  │                     └─ analyze_edge_fatigue()
    │  │  │
-   │  │  └──────────► InfluxDB (Time-series telemetry)
-   │  │                 ▲
-   │  │                 │
-   │  └─────────────► Telegraf (MQTT subscriber)
-   │                    ▲
-   │                    │
-   └────────────────► MongoDB (Pilot profiles, GridFS)
+   │  │  └────────────────► InfluxDB (Time-series, Port 8086)
+   │  │                       └─ Bucket: telegraf
+   │  │
+   │  └────────► Telegraf (MQTT → InfluxDB Pipeline)
+   │               ├─ Subscribes: # (all topics)
+   │               ├─ Format: JSON
+   │               └─ Tags: pilot_username, flight_id
+   │
+   └──────────────────────► MongoDB (Port 27017)
+                             ├─ Database: cogniflight
+                             ├─ Collection: vfs (virtual filesystem)
+                             └─ GridFS: File storage
 
-   MQTT Broker ◄──────── Edge Devices (Network Connector)
-   (Mosquitto)           └─ Telemetry publishing
+   ┌──────────────────┐
+   │  MQTT Broker     │ (Mosquitto, Port 8883 TLS)
+   │  (mosquitto)     │ ├─ Auth: HTTP backend /check-mqtt-user
+   │                  │ ├─ TLS: fullchain.pem + privkey.pem
+   │                  │ └─ Persistence: /mosquitto/data
+   └────────▲─────────┘
+            │
+            │ MQTT/TLS
+   ┌────────┴─────────┐
+   │  Edge Devices    │ (Network Connector)
+   │  (Raspberry Pi)  │ └─ Publish: cogniflight/telemetry
+   └──────────────────┘
 ```
 
 **Why It Matters:**
@@ -897,15 +922,23 @@ SOA Components:
 
 #### 8. ML Engine - Face Embedding Generation
 
-**Location:** `ml/` (Python service)
+**Location:** `ml-engine/` (Python service)
 
-**Purpose:** Stateless ML service that generates face embeddings via JSON-RPC interface
+**Purpose:** Stateless ML service that generates face embeddings and performs cloud-based fatigue analysis via JSON-RPC interface
 
 **Key Features:**
 - **Unix socket JSON-RPC server** (not HTTP)
-- InsightFace model for 512-dimensional face embeddings
-- Stateless design - returns embeddings without storage
+- InsightFace model for 512-dimensional normalized face embeddings
+- Cloud-based fatigue analysis and health risk assessment
+- Stateless design - returns results without storage
 - Backend handles embedding persistence to MongoDB GridFS
+
+**Exposed JSON-RPC Methods:**
+- `generate_face_embedding()` - Generates 512D normalized embedding from photo
+  - Returns: `{success, embedding, confidence, face_count, error}`
+- `analyze_edge_fatigue()` - Cloud-based comprehensive fatigue analysis
+  - Analyzes: EAR, microsleep, yawning, HRV, stress, environment
+  - Returns: `{fusion_score, confidence, criticality, reasoning, trends, recommendations}`
 
 **Architecture:**
 ```
@@ -931,6 +964,8 @@ Edge Device                Cloud Backend              ML Engine
 - **Stateless Service**: Can be scaled independently without state management
 - **Unix Socket**: Faster than HTTP for local inter-process communication
 - **Backend Controls Storage**: Backend decides when/where to persist embeddings
+- **Cloud Analytics**: Provides secondary analysis layer complementing edge-based real-time detection
+- **Normalized Embeddings**: L2 normalization ensures consistent comparison metrics
 
 ---
 
@@ -1297,13 +1332,21 @@ Edge Device                Cloud Backend              ML Engine
 
 **Systemd Watchdog:** Process monitoring that restarts services if they become unresponsive
 
-**GridFS:** MongoDB's specification for storing large files across multiple documents
+**GridFS:** MongoDB specification for storing and retrieving large files across multiple documents (used for virtual filesystem)
 
 **Session Cookie:** Cookie-based authentication mechanism (sessid cookie with 1-hour expiry)
 
 **MQTT:** Lightweight publish/subscribe messaging protocol for IoT
 
+**MessagePack:** Efficient binary serialization format for compact data transmission (used in WebSocket communication)
+
 **InfluxDB:** Time-series database optimized for telemetry data
+
+**Telegraf:** Data collection agent that subscribes to MQTT and writes to InfluxDB
+
+**JSON-RPC:** Remote procedure call protocol using JSON for data encoding
+
+**go-auth:** Mosquitto authentication plugin that validates credentials via HTTP backend
 
 **DO-178C:** Software standard for airborne systems certification
 

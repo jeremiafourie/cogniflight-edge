@@ -3,6 +3,7 @@ import json
 import time
 import sys
 import logging
+import math
 from pathlib import Path
 from collections import deque
 import systemd.daemon
@@ -715,7 +716,7 @@ def main():
             time.sleep(0.1)
 
     except KeyboardInterrupt:
-        logger.info("Predictor service stopping...")
+        logger.info("Simplified Predictor service stopping...")
         core.shutdown()
 
 

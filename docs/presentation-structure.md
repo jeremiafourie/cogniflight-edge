@@ -53,11 +53,12 @@ A comprehensive, multi-modal fatigue detection system that:
    - Offline-first architecture with network-optional telemetry
    - Multi-sensory alert system
 
-2. **CogniFlight Cloud** (Docker-based microservices)
+2. **CogniFlight Cloud** (Service-Oriented Architecture)
+   - **SOA Design**: 7 containerized microservices (Backend, ML Engine, Frontend, MongoDB, InfluxDB, MQTT, Telegraf)
    - Centralized fleet management platform
-   - Real-time telemetry processing and storage
-   - ML-powered analytics engine
-   - Interactive web dashboard
+   - WebSocket command interface for edge communication
+   - Real-time telemetry pipeline (MQTT → Telegraf → InfluxDB)
+   - Cookie-based authentication with virtual filesystem (GridFS)
 
 ### Key Technologies
 
@@ -145,24 +146,29 @@ A comprehensive, multi-modal fatigue detection system that:
 
 | **Category** | **Technology** | **Purpose** |
 |-------------|----------------|-------------|
+| **Architecture** | Service-Oriented Architecture (SOA) | Microservices with loose coupling |
 | **Frontend** | React | Interactive web dashboard |
 | | JavaScript/TypeScript | UI logic |
-| | WebSocket Client | Real-time updates |
+| | WebSocket Client | Command interface connection |
 | **Backend** | Go | Primary backend language |
-| | Gin Web Framework | REST API & routing |
-| | JWT | Authentication tokens |
-| | WebSocket Server | Bidirectional communication |
-| **ML/Analytics** | Python | ML engine & analytics |
-| | NumPy/Pandas | Data processing |
+| | Gin Web Framework | HTTP routing & WebSocket upgrade |
+| | Cookie-based Sessions | Authentication (sessid, 1-hour) |
+| | WebSocket Server | Command interface (`/cmd-socket`) |
+| | GridFS (MongoDB) | Virtual filesystem storage |
+| **ML Engine** | Python | Separate ML service |
 | | InsightFace | Face embedding generation |
-| **Databases** | MongoDB | Document storage (pilots, profiles) |
+| | JSON-RPC | Inter-service communication |
+| | Unix Socket | Backend ↔ ML communication |
+| **Databases** | MongoDB | Pilot profiles, virtual filesystem (GridFS) |
 | | InfluxDB | Time-series telemetry data |
 | **Messaging** | Mosquitto MQTT | Message broker (TLS secured) |
+| | Telegraf | MQTT → InfluxDB pipeline |
 | **Deployment** | Docker | Containerization |
-| | Docker Compose | Multi-container orchestration |
+| | Docker Compose | SOA orchestration (7 services) |
 | **Security** | TLS 1.2+ | Encryption in transit |
-| | bcrypt | Password hashing |
-| | RBAC | Role-based access control |
+| | File-based Credentials | `/etc/passwd/{user}.login` storage |
+| | Session Files | `/etc/sess/{sessid}` storage |
+| | Cookie HttpOnly Flag | XSS protection |
 
 ### Example Stack Diagram (Simple)
 
@@ -264,15 +270,15 @@ graph TB
 
     subgraph Backend["Backend Services"]
         GIN["Gin Web Server<br/>(Go)"]
-        AUTH["Authentication<br/>(JWT)"]
-        API["REST API"]
-        WS_SERVER["WebSocket Server<br/>(Real-time Commands)"]
+        AUTH["Authentication<br/>(Cookie Sessions)"]
+        CMD["Command Interface<br/>(/cmd-socket)"]
+        WS_SERVER["WebSocket Server<br/>(Bidirectional)"]
+        GRIDFS["Virtual Filesystem<br/>(MongoDB GridFS)"]
     end
 
     subgraph ML["ML Engine"]
-        PYML["Python ML Service"]
-        EMBED["Face Embedding Storage"]
-        ANALYTICS["Telemetry Analytics"]
+        PYML["Python ML Service<br/>(JSON-RPC)"]
+        INSIGHT["InsightFace Model<br/>(Embedding Generation)"]
     end
 
     subgraph Messaging["Message Broker"]
@@ -285,24 +291,20 @@ graph TB
     end
 
     REACT --> WS_CLIENT
-    REACT --> API
 
     WS_CLIENT <--> WS_SERVER
-    API --> GIN
     WS_SERVER --> GIN
     AUTH --> GIN
+    CMD --> WS_SERVER
+    GRIDFS --> MONGO
 
     GIN <--> MONGO
     GIN <--> INFLUX
-    GIN <--> PYML
-
-    PYML <--> MONGO
-    PYML <--> EMBED
+    GIN -.Unix Socket.-> PYML
+    PYML --> INSIGHT
 
     MQTT --> INFLUX
-    MQTT <--> GIN
-
-    ANALYTICS --> INFLUX
+    MQTT -.Subscribe.-> GIN
 ```
 
 **Key Design Principles:**
@@ -724,52 +726,211 @@ def handle_state_change(self, state_data: Dict[str, Any]):
 
 ---
 
-#### 7. Cloud Backend - API & WebSocket Server
+#### 7. Cloud Backend - Service-Oriented Architecture (SOA)
 
 **Location:** `backend/` (Go/Gin framework)
 
-**Purpose:** RESTful API and WebSocket server for frontend, MQTT telemetry ingestion, database management
+**Purpose:** SOA-based backend with WebSocket command interface, cookie-based authentication, virtual filesystem, and service orchestration
+
+**Architecture:** Service-Oriented Architecture (SOA)
+- Microservices: Backend, ML Engine, MQTT Broker, MongoDB, InfluxDB, Telegraf, Frontend
+- Inter-service communication via Docker network and Unix sockets
+- Loose coupling with standardized interfaces
 
 **Key Features:**
-- JWT-based authentication
-- Role-based access control (Admin, ATC, Pilot)
-- WebSocket command interface for real-time edge communication
-- MQTT subscriber for telemetry ingestion
-- MongoDB for pilot profiles and documents
-- InfluxDB for time-series telemetry
+- **Cookie-based authentication** (sessid cookie, 1-hour session)
+- File-based credential storage (`/etc/passwd/{username}.login`)
+- Virtual filesystem stored in MongoDB GridFS
+- WebSocket command interface (`/cmd-socket`)
+- MQTT telemetry ingestion via Telegraf
+- ML Engine integration via Unix socket (JSON-RPC)
 
-**Critical Architecture:**
+**Critical Code Snippet (Authentication):**
+```go
+// backend/auth/login.go
+func Login(c *gin.Context) {
+    // Read credentials from file-based storage
+    credFile := fmt.Sprintf("/etc/passwd/%s.login", username)
+    credData, err := os.ReadFile(credFile)
+
+    // Validate password
+    if !util.CheckPwd(password, storedCred) {
+        c.JSON(401, gin.H{"error": "Invalid credentials"})
+        return
+    }
+
+    // Generate session token
+    sessID := util.GenerateToken()
+
+    // Write session to /etc/sess
+    sessFile := fmt.Sprintf("/etc/sess/%s", sessID)
+    os.WriteFile(sessFile, []byte(username), 0600)
+
+    // Set cookie (1 hour duration)
+    c.SetCookie("sessid", sessID, 3600, "/",
+                os.Getenv("COOKIE_DOMAIN"),
+                os.Getenv("HTTPS") == "true", true)
+
+    c.JSON(200, gin.H{"status": "ok"})
+}
 ```
-Backend Structure:
-- /login → JWT token generation
-- /cmd-socket → WebSocket upgrade (bidirectional)
-- /api/pilots → Pilot CRUD operations
-- /api/telemetry → Query time-series data
-- MQTT subscriber → Ingest edge telemetry → InfluxDB
+
+**Critical Code Snippet (WebSocket Command Interface):**
+```go
+// backend/main.go - ML Engine Connection
+func main() {
+    // Connect to ML engine via Unix socket
+    mlSockFile := os.Getenv("ML_SOCK_FILE")
+    if mlSockFile == "" {
+        mlSockFile = "../ml-engine/test.sock"
+    }
+
+    // Retry connection with backoff
+    var conn net.Conn
+    for {
+        conn, err = net.Dial("unix", mlSockFile)
+        if err == nil {
+            log.Printf("Connected to ML engine at %s", mlSockFile)
+            break
+        }
+        time.Sleep(2 * time.Second)
+    }
+
+    // Establish JSON-RPC connection
+    stream := jsonrpc2.NewPlainObjectStream(conn)
+    mlConn := jsonrpc2.NewConn(context.Background(), stream, nil)
+
+    // Setup routes
+    r.POST("/signup/check-username/:username", signup.CheckUsernameAvailable)
+    r.POST("/signup", signup.Signup)
+    r.POST("/login", login.Login)
+
+    // WebSocket endpoint for command interface
+    r.GET("/cmd-socket", auth_middleware.AuthMiddleware(),
+          func(c *gin.Context) {
+              cmd.CmdWebhook(c, mlConn, mongoClient, influxClient)
+          })
+}
+```
+
+**Critical Code Snippet (Edge to Cloud Communication):**
+```go
+// services/go_client/client.go
+func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, username string) (*PilotInfo, error) {
+    // Execute command via WebSocket command interface
+    stdout := &bytes.Buffer{}
+    status, err := api_client.RunCommand(ctx, client.CommandOptions{
+        Command: fmt.Sprintf("cat /home/%s/user.profile", username),
+        Stdin:   strings.NewReader(""),
+        Stdout:  stdout,
+        Stderr:  &bytes.Buffer{},
+    })
+
+    // Convert YAML to JSON
+    jsonBytes, err := yaml.YAMLToJSON(stdout.Bytes())
+
+    // Get face embedding from virtual filesystem
+    stdout.Reset()
+    status, err = api_client.RunCommand(ctx, client.CommandOptions{
+        Command: fmt.Sprintf("cat /home/%s/user.embedding", username),
+        Stdin:   strings.NewReader(""),
+        Stdout:  stdout,
+        Stderr:  &bytes.Buffer{},
+    })
+
+    // Decode base64 embedding (512-dimensional float64 array)
+    data, _ := base64.StdEncoding.DecodeString(stdout.String())
+    embedding := make([]float64, len(data)/8)
+    for i := 0; i < len(embedding); i++ {
+        bits := binary.LittleEndian.Uint64(data[i*8 : (i+1)*8])
+        embedding[i] = math.Float64frombits(bits)
+    }
+
+    return &PilotInfo{
+        Username:      username,
+        FlightID:      flightID,
+        Authenticated: "true",
+        PersonalData:  string(jsonBytes),
+        Embedding:     embedding,
+    }, nil
+}
+```
+
+**Service Architecture:**
+```
+SOA Components:
+┌────────────────┐
+│   Frontend     │ (React - Web Dashboard)
+└───────┬────────┘
+        │ HTTPS/WSS
+┌───────▼────────┐
+│   Backend      │ (Go/Gin - Command Interface)
+│   ├─ Auth      │ (Cookie-based sessions)
+│   ├─ /cmd-socket│ (WebSocket commands)
+│   └─ GridFS    │ (Virtual filesystem)
+└──┬──┬──┬───┬──┘
+   │  │  │   │
+   │  │  │   └──────► ML Engine (Unix socket JSON-RPC)
+   │  │  │              └─ Face embedding generation
+   │  │  │
+   │  │  └──────────► InfluxDB (Time-series telemetry)
+   │  │                 ▲
+   │  │                 │
+   │  └─────────────► Telegraf (MQTT subscriber)
+   │                    ▲
+   │                    │
+   └────────────────► MongoDB (Pilot profiles, GridFS)
+
+   MQTT Broker ◄──────── Edge Devices (Network Connector)
+   (Mosquitto)           └─ Telemetry publishing
 ```
 
 **Why It Matters:**
-- Centralized fleet management
-- Real-time command and control
-- Historical analytics and reporting
+- **SOA Design**: Independent services that can be scaled separately
+- **Virtual Filesystem**: Unified command interface abstracts storage (MongoDB GridFS)
+- **Cookie Authentication**: Stateful sessions for web dashboard
+- **Command Interface**: Edge devices execute filesystem commands via WebSocket
+- **ML Engine Isolation**: Separate Python service for embedding generation
+- **Telegraf Pipeline**: MQTT → Telegraf → InfluxDB for efficient telemetry ingestion
 
 ---
 
-#### 8. ML Engine - Face Embeddings & Analytics
+#### 8. ML Engine - Face Embedding Generation
 
 **Location:** `ml/` (Python service)
 
-**Purpose:** Generate face embeddings for pilot authentication, telemetry analytics
+**Purpose:** Stateless ML service that generates face embeddings via JSON-RPC interface
 
 **Key Features:**
-- InsightFace embedding generation
-- Persistent embedding storage in MongoDB
-- Telemetry anomaly detection
-- Fatigue pattern analysis
+- **Unix socket JSON-RPC server** (not HTTP)
+- InsightFace model for 512-dimensional face embeddings
+- Stateless design - returns embeddings without storage
+- Backend handles embedding persistence to MongoDB GridFS
+
+**Architecture:**
+```
+Edge Device                Cloud Backend              ML Engine
+    │                           │                         │
+    │  Photo + username         │                         │
+    ├──────────────────────────►│                         │
+    │      (WebSocket)           │                         │
+    │                           │  generate_embedding()   │
+    │                           ├────────────────────────►│
+    │                           │   (JSON-RPC via Unix)   │
+    │                           │                         │
+    │                           │   Return 512D vector    │
+    │                           │◄────────────────────────┤
+    │                           │                         │
+    │  Store to GridFS          │                         │
+    │  /home/{user}/embedding   │                         │
+    │                           │                         │
+```
 
 **Why It Matters:**
-- Enables secure, privacy-preserving face authentication
-- Advanced analytics for long-term fatigue trends
+- **Separation of Concerns**: ML logic isolated from storage/business logic
+- **Stateless Service**: Can be scaled independently without state management
+- **Unix Socket**: Faster than HTTP for local inter-process communication
+- **Backend Controls Storage**: Backend decides when/where to persist embeddings
 
 ---
 
@@ -913,10 +1074,12 @@ Backend Structure:
 - Microservices orchestration
 
 **Cloud Infrastructure:**
-- Docker containerization
+- Service-Oriented Architecture (SOA)
+- Docker containerization and multi-service orchestration
 - Multi-database architecture (MongoDB + InfluxDB)
-- RESTful API design
-- JWT authentication
+- WebSocket command interface design
+- Cookie-based session authentication
+- Virtual filesystem with GridFS
 
 **Data Science:**
 - Sensor fusion algorithms
@@ -1134,7 +1297,9 @@ Backend Structure:
 
 **Systemd Watchdog:** Process monitoring that restarts services if they become unresponsive
 
-**JWT (JSON Web Token):** Secure authentication token format
+**GridFS:** MongoDB's specification for storing large files across multiple documents
+
+**Session Cookie:** Cookie-based authentication mechanism (sessid cookie with 1-hour expiry)
 
 **MQTT:** Lightweight publish/subscribe messaging protocol for IoT
 

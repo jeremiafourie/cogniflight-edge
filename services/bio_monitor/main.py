@@ -263,9 +263,10 @@ class HRAnalyzer:
         
     def update_baseline(self, pilot_profile):
         """Update baseline from pilot profile"""
-        if pilot_profile and pilot_profile.baseline:
-            self.baseline_hr = pilot_profile.baseline.get('heart_rate', 72)
-            self.baseline_hrv = pilot_profile.baseline.get('heart_rate_variability', 45)
+        if pilot_profile and pilot_profile.personal_data:
+            cardio_baselines = pilot_profile.personal_data.get('cardiovascular_baselines', {})
+            self.baseline_hr = cardio_baselines.get('resting_heart_rate_bpm', 72)
+            self.baseline_hrv = cardio_baselines.get('resting_heart_rate_std_dev', 45)
             self.logger.info(f"Updated baseline: HR={self.baseline_hr}, HRV={self.baseline_hrv}")
         else:
             # Use default values if no profile
@@ -347,7 +348,7 @@ class HRAnalyzer:
             self.rr_intervals.append(rr_interval)
         
         # Update baseline if needed
-        pilot_profile = self.core.get_active_pilot_profile()
+        pilot_profile = self.core.get_authenticated_pilot_profile()
         current_time = time.time()
         if current_time - self.last_baseline_update > BASELINE_UPDATE_INTERVAL:
             self.update_baseline(pilot_profile)
@@ -398,7 +399,10 @@ def create_notification_handler(core, logger, analyzer):
                     core.publish_data("hr_sensor", hr_data)
                     
                     # Log all HR metrics
-                    logger.info(f"HR: {hr} BPM | RR: {rr_interval:.3f}s | Dev: {metrics['baseline_deviation']:.3f} | RMSSD: {metrics['rmssd']:.1f}ms | Trend: {metrics['hr_trend']:.2f} BPM/min | Stress: {metrics['stress_index']:.3f} | Baseline HR: {metrics['baseline_hr']} | Baseline HRV: {metrics['baseline_hrv']}")
+                    rr_str = f"{rr_interval:.3f}s" if rr_interval is not None else "N/A"
+                    rmssd_str = f"{metrics['rmssd']:.1f}ms" if metrics['rmssd'] is not None else "N/A"
+                    trend_str = f"{metrics['hr_trend']:.2f} BPM/min" if metrics['hr_trend'] is not None else "N/A"
+                    logger.info(f"HR: {hr} BPM | RR: {rr_str} | Dev: {metrics['baseline_deviation']:.3f} | RMSSD: {rmssd_str} | Trend: {trend_str} | Stress: {metrics['stress_index']:.3f} | Baseline HR: {metrics['baseline_hr']} | Baseline HRV: {metrics['baseline_hrv']}")
                     logger.debug(f"Published enhanced HR data: {hr_data}")
                 except Exception as e:
                     logger.error(f"Failed to publish HR data: {e}")
@@ -409,16 +413,26 @@ def create_notification_handler(core, logger, analyzer):
     
     return notification_handler
 
-def disconnect_system_bluetooth(mac_address: str, logger):
-    """Simple disconnect from system Bluetooth."""
+def cleanup_system_bluetooth(mac_address: str, logger):
+    """Remove/unpair device from system Bluetooth to prevent interference."""
     try:
-        result = subprocess.run(['bluetoothctl', 'disconnect', mac_address], 
+        # First disconnect
+        result = subprocess.run(['bluetoothctl', 'disconnect', mac_address],
                               capture_output=True, text=True, timeout=5)
         if result.returncode == 0:
-            logger.info(f"Disconnected {mac_address} from system")
-        return result.returncode == 0
+            logger.info(f"Disconnected {mac_address} from system Bluetooth")
+
+        # Then remove (unpair) to prevent auto-reconnect
+        result = subprocess.run(['bluetoothctl', 'remove', mac_address],
+                              capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            logger.info(f"Removed {mac_address} from system Bluetooth (unpaired)")
+            return True
+        else:
+            logger.debug(f"Could not remove {mac_address}: {result.stderr}")
+            return False
     except Exception as e:
-        logger.warning(f"Could not disconnect {mac_address}: {e}")
+        logger.warning(f"Could not cleanup Bluetooth for {mac_address}: {e}")
         return False
 
 async def connect_and_monitor():
@@ -442,13 +456,13 @@ async def connect_and_monitor():
     try:
         while True:
             try:
-                # Disconnect from system first
-                disconnect_system_bluetooth(HR_SENSOR_MAC, logger)
-                await asyncio.sleep(2)  # Wait for disconnect
+                # Remove device from system Bluetooth to prevent interference
+                cleanup_system_bluetooth(HR_SENSOR_MAC, logger)
+                await asyncio.sleep(5)  # Wait for Bluetooth stack to fully release device
 
                 logger.info(f"Attempting to connect to HR sensor: {HR_SENSOR_MAC}")
 
-                async with BleakClient(HR_SENSOR_MAC) as client:
+                async with BleakClient(HR_SENSOR_MAC, timeout=15.0) as client:
                     logger.info("Connected to HR sensor")
 
                     # Start heart rate notifications
@@ -472,7 +486,10 @@ async def connect_and_monitor():
                         await asyncio.sleep(1)
 
             except Exception as e:
-                logger.warning(f"HR sensor connection failed: {e}. Retrying in {RETRY_DELAY}s")
+                # Log detailed error information
+                error_type = type(e).__name__
+                error_msg = str(e) if str(e) else "No error message"
+                logger.warning(f"HR sensor connection failed: {error_type}: {error_msg}. Retrying in {RETRY_DELAY}s")
 
                 # Send watchdog notifications during retry delay to prevent timeout
                 retry_start = time.time()

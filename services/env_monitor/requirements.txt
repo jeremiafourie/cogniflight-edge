@@ -3,6 +3,12 @@ adafruit-circuitpython-dht
 board
 lgpio
 RPi.GPIO
+# For GY-91 10-DOF sensor (MPU9250 + BMP280)
+imusensor
+numpy
+easydict
+adafruit-circuitpython-bmp280
+smbus
 # For CogniCore communication
 redis
 systemd-python

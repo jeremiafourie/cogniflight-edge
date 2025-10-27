@@ -115,7 +115,7 @@ class StateSnapshot:
 
 
 class ThreadSafeStateManager:
-    """Thread-safe state manager with enhanced validation and error handling"""
+    """Thread-safe state manager with permission validation and error handling"""
     
     def __init__(self, max_history: int = 1000, enforce_permissions: bool = True):
         self._lock = threading.RLock()
@@ -138,24 +138,12 @@ class ThreadSafeStateManager:
     def transition_state(self, state: SystemState, message: str, service: str,
                         pilot_username: Optional[str] = None, data: Optional[Dict[str, Any]] = None,
                         force: bool = False) -> StateSnapshot:
-        """Safely transition to new state with enhanced validation"""
+        """Safely transition to new state with permission validation"""
         with self._lock:
             # Check service permissions
             if self._enforce_permissions and not force:
                 self._validate_service_permission(service, state)
-            
-            # Validate state transition
-            if not self._is_valid_transition(self._current_state, state):
-                if not force:  # Allow forced transitions for emergency recovery
-                    current_state_name = self._current_state.state.value if self._current_state else 'None'
-                    from .exceptions import InvalidStateTransitionError
-                    raise InvalidStateTransitionError(
-                        f"Invalid state transition from {current_state_name} to {state.value} "
-                        f"requested by service '{service}'"
-                    )
-                else:
-                    logger.warning(f"FORCED state transition from {current_state_name} to {state.value} by {service}")
-            
+
             snapshot = StateSnapshot(
                 state=state,
                 message=message,
@@ -164,17 +152,20 @@ class ThreadSafeStateManager:
                 service=service,
                 data=data or {}
             )
-            
+
             # Log state transition
             old_state = self._current_state.state.value if self._current_state else 'None'
-            logger.info(f"State transition: {old_state} -> {state.value} by {service}")
-            
+            if force:
+                logger.warning(f"FORCED state transition: {old_state} -> {state.value} by {service}")
+            else:
+                logger.info(f"State transition: {old_state} -> {state.value} by {service}")
+
             self._current_state = snapshot
             self._state_history.append(snapshot)
-            
+
             # Notify callbacks with enhanced error handling
             self._notify_callbacks(snapshot)
-            
+
             return snapshot
     
     def _validate_service_permission(self, service: str, state: SystemState):
@@ -215,30 +206,6 @@ class ThreadSafeStateManager:
                 del self._callback_failures[callback]
             except (ValueError, KeyError):
                 pass
-    
-    def _is_valid_transition(self, current: Optional[StateSnapshot], new_state: SystemState) -> bool:
-        """Validate state transitions to prevent invalid states"""
-        if current is None:
-            return True  # Any state is valid from None
-
-        # Allow transitioning to the same state (idempotent operation)
-        if current.state == new_state:
-            return True
-
-        # Define valid state transitions for aviation safety
-        valid_transitions = {
-            SystemState.SCANNING: [SystemState.MONITORING_ACTIVE, SystemState.INTRUDER_DETECTED, SystemState.ALCOHOL_DETECTED, SystemState.SYSTEM_ERROR],
-            SystemState.INTRUDER_DETECTED: [SystemState.SCANNING, SystemState.ALCOHOL_DETECTED, SystemState.SYSTEM_ERROR],
-            SystemState.MONITORING_ACTIVE: [SystemState.ALERT_MILD, SystemState.ALCOHOL_DETECTED, SystemState.SCANNING, SystemState.SYSTEM_ERROR],
-            SystemState.ALERT_MILD: [SystemState.ALERT_MODERATE, SystemState.MONITORING_ACTIVE, SystemState.ALCOHOL_DETECTED, SystemState.SYSTEM_ERROR],
-            SystemState.ALERT_MODERATE: [SystemState.ALERT_SEVERE, SystemState.ALERT_MILD, SystemState.MONITORING_ACTIVE, SystemState.ALCOHOL_DETECTED, SystemState.SYSTEM_ERROR],
-            SystemState.ALERT_SEVERE: [SystemState.ALERT_MODERATE, SystemState.MONITORING_ACTIVE, SystemState.ALCOHOL_DETECTED, SystemState.SYSTEM_ERROR, SystemState.SYSTEM_CRASHED],
-            SystemState.ALCOHOL_DETECTED: [SystemState.MONITORING_ACTIVE, SystemState.ALERT_MILD, SystemState.ALERT_MODERATE, SystemState.ALERT_SEVERE, SystemState.SYSTEM_ERROR],  # Can transition back to any operational state
-            SystemState.SYSTEM_ERROR: [SystemState.SCANNING, SystemState.SYSTEM_CRASHED],
-            SystemState.SYSTEM_CRASHED: [SystemState.SCANNING]  # Recovery possible
-        }
-
-        return new_state in valid_transitions.get(current.state, [])
     
     def add_state_callback(self, callback: Callable[[StateSnapshot], None]):
         """Add callback for state changes"""

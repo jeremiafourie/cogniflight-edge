@@ -3,6 +3,7 @@ import json
 import time
 import sys
 import logging
+import math
 from pathlib import Path
 from collections import deque
 import systemd.daemon
@@ -13,98 +14,290 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from CogniCore import CogniCore, SystemState
 SERVICE_NAME = "predictor"
 
-# Size of the sliding window (N = 2 samples for faster response)
-WINDOW_SIZE = 2
+# Enhanced sliding window for temporal analysis
+WINDOW_SIZE = 5  # Increased for better trend analysis
+TREND_WINDOW_SIZE = 10  # For detecting progression patterns
 
-# Default threshold values - can be personalized per pilot
-DEFAULT_THRESHOLD_MILD   = 0.3
-DEFAULT_THRESHOLD_MOD    = 0.6
-DEFAULT_THRESHOLD_SEVERE = 0.8
-DEFAULT_HYSTERESIS       = 0.05  # small gap to prevent flapping
+# Enhanced threshold system with hysteresis
+DEFAULT_THRESHOLD_MILD   = 0.25  # Lowered for earlier detection
+DEFAULT_THRESHOLD_MOD    = 0.50  # More conservative thresholds
+DEFAULT_THRESHOLD_SEVERE = 0.75
+DEFAULT_HYSTERESIS       = 0.05
+
+class EnhancedFatiguePredictor:
+    def __init__(self):
+        self.fusion_history = deque(maxlen=TREND_WINDOW_SIZE)
+        self.hr_baseline_buffer = deque(maxlen=60)  # 1 minute of HR data for dynamic baseline
+        self.hrv_baseline_buffer = deque(maxlen=60)
+        
+    def calculate_enhanced_fusion_score(self, vision_data, hr_data):
+        """
+        Simplified fusion algorithm using Vision (70%) and Heart Rate (30%) only
+        """
+        # Initialize component scores
+        vision_score = 0.0
+        hr_score = 0.0
+        
+        # Data availability flags for confidence scoring
+        has_vision = bool(vision_data)
+        has_hr = bool(hr_data and hr_data.get('hr'))
+        
+        # ===========================================
+        # VISION ANALYSIS (70% weight - CRITICAL)
+        # ===========================================
+        if has_vision:
+            vision_score = self._calculate_vision_score(vision_data)
+        
+        # ===========================================
+        # HEART RATE ANALYSIS (30% weight - HIGH)
+        # ===========================================
+        if has_hr:
+            hr_score = self._calculate_hr_score(hr_data)
+        
+        # ===========================================
+        # SIMPLIFIED FUSION (VISION + HR)
+        # ===========================================
+        
+        # Base weights - Vision and HR only
+        base_weights = {
+            'vision': 0.70,
+            'hr': 0.30
+        }
+        
+        # Adjust weights based on data availability
+        available_sensors = []
+        if has_vision: available_sensors.append('vision')
+        if has_hr: available_sensors.append('hr')
+        
+        if not available_sensors:
+            return 0.0, 0.0  # No data, no confidence
+        
+        # Redistribute weights among available sensors
+        adjusted_weights = self._redistribute_weights(base_weights, available_sensors)
+        
+        # Calculate weighted fusion score (Vision + HR only)
+        fusion_score = (
+            vision_score * adjusted_weights.get('vision', 0) +
+            hr_score * adjusted_weights.get('hr', 0)
+        )
+        
+        # Calculate confidence based on sensor availability and data quality
+        confidence = self._calculate_confidence(available_sensors, vision_data, hr_data)
+        
+        # Apply temporal smoothing and trend analysis
+        fusion_score = self._apply_temporal_analysis(fusion_score)
+        
+        return min(1.0, max(0.0, fusion_score)), confidence
+    
+    def _calculate_vision_score(self, vision_data):
+        """Enhanced vision analysis using all available vision metrics"""
+        score = 0.0
+        
+        # Eye Aspect Ratio Analysis (CRITICAL - 50% of vision score)
+        avg_ear = vision_data.get("avg_ear", 0.25)
+        if avg_ear < 0.15:  # Severely drooping eyes
+            ear_score = 1.0
+        elif avg_ear < 0.20:  # Critical drowsiness threshold
+            ear_score = 0.8 + (0.20 - avg_ear) * 4.0  # Steep increase
+        elif avg_ear < 0.25:  # Mild drowsiness
+            ear_score = (0.25 - avg_ear) * 3.2  # 0.25->0, 0.20->0.16
+        else:
+            ear_score = 0.0
+        
+        # Eye Closure Duration (CRITICAL - 25% of vision score)
+        closure_duration = vision_data.get("closure_duration", 0.0)
+        if closure_duration >= 3.0:  # 3+ seconds = severe
+            closure_score = 1.0
+        elif closure_duration >= 1.0:  # 1-3 seconds = moderate to severe
+            closure_score = 0.5 + (closure_duration - 1.0) * 0.25
+        elif closure_duration >= 0.5:  # 0.5-1 second = mild
+            closure_score = closure_duration * 1.0
+        else:
+            closure_score = 0.0
+        
+        # Microsleep Events (CRITICAL - 15% of vision score)
+        microsleep_count = vision_data.get("microsleep_count", 0)
+        microsleep_score = min(1.0, microsleep_count * 0.3)  # Each microsleep adds 0.3
+        
+        # Blink Rate Analysis (MEDIUM - 10% of vision score)
+        blink_rate = vision_data.get("blink_rate_per_minute", 15.0)
+        if blink_rate < 5:  # Very low blinking
+            blink_score = 1.0
+        elif blink_rate < 10:  # Low blinking (fatigue)
+            blink_score = (10 - blink_rate) / 5.0
+        elif blink_rate > 40:  # Excessive blinking (stress/fatigue)
+            blink_score = min(1.0, (blink_rate - 40) / 20.0)
+        else:
+            blink_score = 0.0
+        
+        # Combine vision components
+        score = (ear_score * 0.50 + 
+                closure_score * 0.25 + 
+                microsleep_score * 0.15 + 
+                blink_score * 0.10)
+        
+        return min(1.0, score)
+    
+    def _calculate_hr_score(self, hr_data):
+        """Enhanced heart rate analysis using all available HR metrics"""
+        score = 0.0
+        
+        # Heart Rate Variability (RMSSD) - HIGH impact (40% of HR score)
+        rmssd = hr_data.get("rmssd")
+        if rmssd is not None:
+            if rmssd < 15:  # Severe fatigue/stress
+                hrv_score = 1.0
+            elif rmssd < 25:  # Moderate fatigue
+                hrv_score = (25 - rmssd) / 10.0
+            elif rmssd < 35:  # Mild concern
+                hrv_score = (35 - rmssd) / 20.0
+            else:
+                hrv_score = 0.0
+        else:
+            hrv_score = 0.0
+        
+        # Stress Index - HIGH impact (30% of HR score)
+        stress_index = hr_data.get("stress_index", 0.0)
+        stress_score = min(1.0, stress_index)  # Already normalized 0-1
+        
+        # Baseline Deviation - MEDIUM impact (20% of HR score)
+        baseline_deviation = hr_data.get("baseline_deviation", 0.0)
+        if baseline_deviation > 0.4:  # >40% deviation is concerning
+            deviation_score = min(1.0, (baseline_deviation - 0.2) / 0.3)
+        else:
+            deviation_score = 0.0
+        
+        # HR Trend Analysis - MEDIUM impact (10% of HR score)
+        hr_trend = hr_data.get("hr_trend", 0)
+        if abs(hr_trend) > 15:  # Rapid HR changes
+            trend_score = min(1.0, (abs(hr_trend) - 10) / 20.0)
+        else:
+            trend_score = 0.0
+        
+        # Update dynamic baseline
+        current_hr = hr_data.get("hr")
+        current_hrv = hr_data.get("rmssd")
+        if current_hr:
+            self.hr_baseline_buffer.append(current_hr)
+        if current_hrv:
+            self.hrv_baseline_buffer.append(current_hrv)
+        
+        # Combine HR components
+        score = (hrv_score * 0.40 + 
+                stress_score * 0.30 + 
+                deviation_score * 0.20 + 
+                trend_score * 0.10)
+        
+        return min(1.0, score)
+    
+    def _redistribute_weights(self, base_weights, available_sensors):
+        """Redistribute weights when sensors are unavailable"""
+        if len(available_sensors) == len(base_weights):
+            return base_weights
+        
+        # Calculate total available weight
+        available_weight = sum(base_weights[sensor] for sensor in available_sensors)
+        
+        # Redistribute proportionally
+        adjusted = {}
+        for sensor in available_sensors:
+            adjusted[sensor] = base_weights[sensor] / available_weight
+        
+        return adjusted
+    
+    def _calculate_confidence(self, available_sensors, vision_data, hr_data):
+        """Calculate confidence score based on data availability and quality"""
+        base_confidence = len(available_sensors) / 2.0  # 2 total sensor types (Vision + HR only)
+        
+        # Adjust for data quality
+        quality_bonus = 0.0
+        
+        if vision_data:
+            # High quality vision data (all metrics available)
+            vision_metrics = ['avg_ear', 'eyes_closed', 'closure_duration', 'microsleep_count']
+            vision_completeness = sum(1 for metric in vision_metrics if vision_data.get(metric) is not None) / len(vision_metrics)
+            quality_bonus += vision_completeness * 0.3  # Increased since vision is more important
+        
+        if hr_data:
+            # High quality HR data (HRV available)
+            if hr_data.get('rmssd') is not None:
+                quality_bonus += 0.2  # Increased weighting for HRV availability
+        
+        return min(1.0, base_confidence + quality_bonus)
+    
+    def _apply_temporal_analysis(self, current_score):
+        """Apply temporal smoothing and trend analysis"""
+        self.fusion_history.append(current_score)
+        
+        if len(self.fusion_history) < 2:
+            return current_score
+        
+        # Exponential moving average for smoothing
+        weights = [0.4, 0.3, 0.2, 0.07, 0.03][:len(self.fusion_history)]
+        weights = weights[::-1]  # Most recent gets highest weight
+        
+        smoothed_score = sum(score * weight for score, weight in zip(self.fusion_history, weights))
+        smoothed_score /= sum(weights)
+        
+        # Trend analysis - detect rapid deterioration
+        if len(self.fusion_history) >= 3:
+            recent_trend = self.fusion_history[-1] - self.fusion_history[-3]
+            if recent_trend > 0.2:  # Rapid fatigue increase
+                smoothed_score += 0.1  # Small boost for trend
+        
+        return smoothed_score
 
 def calculate_fusion_score(vision_data, hr_data):
     """
-    LEAN fusion score calculation using only the highest-value vision indicators.
-    Optimized for speed and accuracy with minimal overhead.
+    Simplified fusion score calculation using Vision (70%) and Heart Rate (30%) only
     """
-    if not vision_data:
-        return 0.0
+    global predictor
     
-    # Extract lean vision measurements (only the most valuable)
-    avg_ear = vision_data.get("avg_ear", 0.25)
-    eyes_closed = vision_data.get("eyes_closed", False) 
-    closure_duration = vision_data.get("closure_duration", 0.0)
-    microsleep_count = vision_data.get("microsleep_count", 0)
-    blink_rate = vision_data.get("blink_rate_per_minute", 15.0)
+    if 'predictor' not in globals():
+        predictor = EnhancedFatiguePredictor()
     
-    # EAR-based fatigue analysis (50% of score - most reliable indicator)
-    # Normal EAR is ~0.25-0.35, fatigue shows as lower values
-    ear_fatigue = max(0, (0.30 - avg_ear) / 0.20)  # Normalize to 0-1
+    fusion_score, confidence = predictor.calculate_enhanced_fusion_score(vision_data, hr_data)
     
-    # Eye closure duration analysis (30% of score - critical for safety) 
-    closure_fatigue = 0.0
-    if closure_duration > 0.5:  # Any extended closure is concerning
-        closure_fatigue = min(1.0, closure_duration / 3.0)  # 3+ seconds = max fatigue
-    
-    # Microsleep events (15% of score - direct safety indicator)
-    microsleep_fatigue = min(1.0, microsleep_count / 2.0)  # 2+ microsleeps = high fatigue
-    
-    # Blink pattern analysis (5% of score - behavioral indicator)
-    blink_fatigue = 0.0
-    if blink_rate < 10:  # Low blink rate (normal is 15-20/min)
-        blink_fatigue = (10 - blink_rate) / 10.0
-    elif blink_rate > 30:  # Excessive blinking can also indicate fatigue
-        blink_fatigue = min(1.0, (blink_rate - 30) / 20.0)
-    
-    # Combine vision indicators (lean approach - focus on proven metrics)
-    vision_fusion = (ear_fatigue * 0.50 + 
-                    closure_fatigue * 0.30 + 
-                    microsleep_fatigue * 0.15 + 
-                    blink_fatigue * 0.05)
-    
-    # Add heart rate if available (reduce vision weight to 75%)
-    if hr_data and "hr" in hr_data:
-        hr = hr_data["hr"]
-        hr_baseline = 70
-        hr_deviation = abs(hr - hr_baseline) / hr_baseline
-        hr_score = min(1.0, hr_deviation * 1.5)  # Slightly reduced HR influence
-        
-        # Combine with HR (75% vision, 25% HR for lean approach)
-        fusion_score = vision_fusion * 0.75 + hr_score * 0.25
-    else:
-        fusion_score = vision_fusion
-    
-    return min(1.0, max(0.0, fusion_score))
+    return fusion_score, confidence
 
 def get_personalized_thresholds(pilot_profile):
-    """Get thresholds based on pilot profile - using default medium sensitivity since alert_sensitivity was removed"""
-    thresholds = {
+    """Enhanced threshold calculation with pilot adaptation"""
+    base_thresholds = {
         "mild": DEFAULT_THRESHOLD_MILD,
         "moderate": DEFAULT_THRESHOLD_MOD,
         "severe": DEFAULT_THRESHOLD_SEVERE
     }
     
-    # With new pilot profile schema, we use standard thresholds
-    # Future enhancement: could use environmentPreferences.noiseSensitivity or other factors
+    # Future enhancement: Use pilot profile for personalization
+    # Could consider: age, experience level, recent flight history, etc.
     
-    return thresholds
+    return base_thresholds
 
-def determine_fatigue_stage(avg_score, thresholds):
-    """Determine fatigue stage based on fusion score"""
-    if avg_score >= thresholds["severe"]:
+def determine_fatigue_stage(avg_score, thresholds, confidence):
+    """Enhanced fatigue stage determination with confidence weighting"""
+    # Adjust thresholds based on confidence
+    confidence_factor = 0.8 + (confidence * 0.4)  # 0.8 to 1.2 multiplier
+    
+    adjusted_thresholds = {
+        "mild": thresholds["mild"] * confidence_factor,
+        "moderate": thresholds["moderate"] * confidence_factor,
+        "severe": thresholds["severe"] * confidence_factor
+    }
+    
+    if avg_score >= adjusted_thresholds["severe"]:
         return "severe"
-    elif avg_score >= thresholds["moderate"]:
+    elif avg_score >= adjusted_thresholds["moderate"]:
         return "moderate"
-    elif avg_score >= thresholds["mild"]:
+    elif avg_score >= adjusted_thresholds["mild"]:
         return "mild"
     else:
         return "active"
 
 def main():
-    """Main predictor service with integrated data fusion and fatigue prediction"""
+    """Simplified predictor service using Vision (70%) and HR (30%) only"""
     core = CogniCore(SERVICE_NAME)
     logger = core.get_logger(SERVICE_NAME)
-    logger.info("Predictor service started with integrated data fusion and enhanced HR analysis")
+    logger.info("Simplified Predictor service started - Vision (70%) + HR (30%) only")
     
     # Notify systemd that service is ready
     systemd.daemon.notify('READY=1')
@@ -117,163 +310,154 @@ def main():
     
     try:
         while True:
-            # Get latest vision data for fusion processing
-            vision_data = core.get_data("vision")
-            
-            # Check if vision data is fresh (within last 10 seconds)
             current_time = time.time()
+            
+            # Collect vision and HR data only
+            vision_data = core.get_data("vision")
+            hr_data = core.get_data("hr_sensor")
+            
+            # Check if vision data is fresh (primary sensor)
             vision_timestamp = vision_data.get("timestamp", 0) if vision_data else 0
             vision_age = current_time - vision_timestamp
-            is_vision_fresh = vision_age < 10  # 10 second threshold
+            is_vision_fresh = vision_age < 10
             
             if vision_data and is_vision_fresh:
-                # Get latest HR data (optional)
-                hr_data = core.get_data("hr_sensor")
+                # Calculate fusion score (Vision + HR only)
+                fusion_score, confidence = calculate_fusion_score(vision_data, hr_data)
                 
-                # Calculate fusion score using enhanced HR metrics
-                fusion_score = calculate_fusion_score(vision_data, hr_data)
-                
-                # Publish fusion result with lean vision data
+                # Simplified fusion data publication (Vision + HR only)
                 fusion_data = {
                     "fusion_score": fusion_score,
+                    "confidence": confidence,
+                    # Vision metrics
                     "avg_ear": vision_data.get("avg_ear", 0),
                     "eyes_closed": vision_data.get("eyes_closed", False),
                     "closure_duration": vision_data.get("closure_duration", 0),
                     "microsleep_count": vision_data.get("microsleep_count", 0),
                     "blink_rate": vision_data.get("blink_rate_per_minute", 0),
+                    # HR metrics
+                    "hr": hr_data.get("hr") if hr_data else None,
+                    "rmssd": hr_data.get("rmssd") if hr_data else None,
+                    "stress_index": hr_data.get("stress_index") if hr_data else None,
+                    # Timestamps
                     "vision_timestamp": vision_data.get("timestamp"),
-                    "hr_timestamp": hr_data.get("timestamp") if hr_data else None,
-                    "hr": hr_data.get("hr") if hr_data else None
+                    "hr_timestamp": hr_data.get("timestamp") if hr_data else None
                 }
                 
                 core.publish_data("fusion", fusion_data)
                 
-                # Add to sliding window for prediction
-                fusion_scores.append(fusion_score)
+                # Add to sliding window
+                fusion_scores.append((fusion_score, confidence))
                 
-                # Only make predictions when we have enough data
-                if len(fusion_scores) >= 2:
-                    # Calculate sliding window average
-                    avg_score = sum(fusion_scores) / len(fusion_scores)
+                # Make predictions with sufficient data
+                if len(fusion_scores) >= 3:  # Need more data for enhanced algorithm
+                    # Calculate weighted average (more recent data weighted higher)
+                    weights = [0.5, 0.3, 0.2][:len(fusion_scores)]
+                    weights = weights[::-1]  # Reverse for recent-first
                     
-                    # Get pilot profile for personalization
+                    avg_score = sum(score * weight for (score, conf), weight in zip(fusion_scores, weights))
+                    avg_score /= sum(weights)
+                    
+                    # Average confidence
+                    avg_confidence = sum(conf for score, conf in fusion_scores) / len(fusion_scores)
+                    
+                    # Get personalized thresholds
                     pilot_profile = core.get_active_pilot_profile()
                     thresholds = get_personalized_thresholds(pilot_profile)
                     
-                    # Determine fatigue stage
-                    new_stage = determine_fatigue_stage(avg_score, thresholds)
+                    # Determine fatigue stage with confidence weighting
+                    new_stage = determine_fatigue_stage(avg_score, thresholds, avg_confidence)
                     
-                    # Always update system state and display current status with all sensor readings
-                    # Get all sensor readings
-                    hr_reading = hr_data.get("hr") if hr_data else "N/A"
-                    ear_reading = vision_data.get("avg_ear", 0)
-                    # Lean approach - no MAR reading (removed for performance)
-                    mar_display = "N/A"
-                    
-                    # Get environmental data
-                    env_data = core.get_data("env_sensor")
-                    temp_reading = int(float(env_data.get("temp", 0))) if env_data and env_data.get("temp") else "N/A"
-                    humidity_reading = int(float(env_data.get("humidity", 0))) if env_data and env_data.get("humidity") else "N/A"
-                    
-                    # Check for stage change  
+                    # Update display and alerts
                     if new_stage != current_stage:
-                        logger.info(f"Fatigue stage change: {current_stage} → {new_stage}")
+                        logger.info(f"Fatigue stage change: {current_stage} → {new_stage} (confidence: {avg_confidence:.2f})")
                         current_stage = new_stage
                         
-                        # Publish fatigue alert with lean vision indicators
+                        # Simplified alert data (Vision + HR factors only)
                         alert_data = {
                             "stage": new_stage,
                             "fusion_score": avg_score,
+                            "confidence": avg_confidence,
                             "pilot_id": pilot_profile.id if pilot_profile else None,
                             "threshold_used": thresholds.get(new_stage, 0),
-                            "avg_ear": fusion_data.get("avg_ear", 0),
-                            "closure_duration": fusion_data.get("closure_duration", 0),
-                            "microsleep_count": fusion_data.get("microsleep_count", 0),
-                            "blink_rate": fusion_data.get("blink_rate", 0)
+                            "contributing_factors": {
+                                "vision": fusion_data.get("avg_ear", 0) < 0.20,
+                                "heart_rate": fusion_data.get("rmssd", 100) < 25
+                            }
                         }
                         
                         core.publish_data("fatigue_alert", alert_data)
                     
-                    # Always update system state with current status and readings
-                    # Format the state display messages
-                    if current_stage == "active":
-                        state_line = "I'm watching"
-                        state_enum = SystemState.MONITORING_ACTIVE
-                    elif current_stage == "mild":
-                        state_line = "Mild"
-                        state_enum = SystemState.ALERT_MILD
-                    elif current_stage == "moderate":
-                        state_line = "Moderate"
-                        state_enum = SystemState.ALERT_MODERATE
-                    elif current_stage == "severe":
-                        state_line = "Severe"
-                        state_enum = SystemState.ALERT_SEVERE
-                    else:
-                        state_line = "I'm still here"
-                        state_enum = SystemState.MONITORING_ACTIVE
+                    # Simplified system state display (Vision + HR only)
+                    stage_messages = {
+                        "active": ("Alert & Ready", SystemState.MONITORING_ACTIVE),
+                        "mild": ("Mild Fatigue", SystemState.ALERT_MILD),
+                        "moderate": ("Moderate Fatigue", SystemState.ALERT_MODERATE),
+                        "severe": ("SEVERE FATIGUE", SystemState.ALERT_SEVERE)
+                    }
                     
-                    # Create display message with state and readings (EAR, BLINK, HR, TEMP, HUMIDITY)
-                    # Format EAR to remove "0." prefix to save LCD space
-                    ear_display = f"{ear_reading:.2f}".lstrip('0') if ear_reading < 1.0 else f"{ear_reading:.2f}"
-                    blink_rate = vision_data.get("blink_rate_per_minute", 0)
+                    state_line, state_enum = stage_messages[current_stage]
                     
-                    display_message = f"{state_line}\n{ear_display} {int(blink_rate)} {temp_reading} {humidity_reading}"
+                    # Display only Vision and HR readings
+                    ear_display = f"{fusion_data.get('avg_ear', 0):.2f}".lstrip('0')
+                    blink_rate = int(fusion_data.get("blink_rate", 0))
+                    hr_display = int(fusion_data.get("hr", 0)) if fusion_data.get("hr") else "N/A"
                     
-                    # Set system state
+                    display_message = f"{state_line} ({avg_confidence:.1f})\n{ear_display} {blink_rate} {hr_display}"
+                    
                     core.set_system_state(
                         state_enum,
                         display_message,
                         pilot_id=pilot_profile.id if pilot_profile else None,
-                        data={"fusion_score": avg_score, "hr": hr_reading, "ear": ear_reading, "blink_rate": blink_rate, "temp": temp_reading, "humidity": humidity_reading}
+                        data={
+                            "fusion_score": avg_score,
+                            "confidence": avg_confidence,
+                            "sensor_readings": fusion_data
+                        }
                     )
                 
-                # Log state and readings periodically (every 5 seconds to reduce overhead)
-                current_time = time.time()
+                # Simplified periodic logging (Vision + HR only)
                 if current_time - last_fusion_heartbeat > 5:
-                    # Print the state with HR and EAR readings as requested
-                    if current_stage == "active":
-                        logger.info("MONITORING_ACTIVE")
-                    elif current_stage == "mild":
-                        logger.info("ALERT_MILD")  
-                    elif current_stage == "moderate":
-                        logger.info("ALERT_MODERATE")
-                    elif current_stage == "severe":
-                        logger.info("ALERT_SEVERE")
+                    stage_log_map = {
+                        "active": "MONITORING_ACTIVE",
+                        "mild": "ALERT_MILD",
+                        "moderate": "ALERT_MODERATE", 
+                        "severe": "ALERT_SEVERE"
+                    }
                     
-                    # Print all sensor readings on second line (EAR, BLINK, HR, TEMP, HUMIDITY)
-                    hr_reading = hr_data.get("hr") if hr_data else "N/A"
-                    ear_reading = vision_data.get("avg_ear", 0)
-                    blink_reading = vision_data.get("blink_rate_per_minute", 0)
+                    logger.info(f"{stage_log_map[current_stage]} (confidence: {fusion_data.get('confidence', 0):.2f})")
                     
-                    # Get environmental data
-                    env_data = core.get_data("env_sensor")
-                    temp_reading = int(float(env_data.get("temp", 0))) if env_data and env_data.get("temp") else "N/A"
-                    humidity_reading = int(float(env_data.get("humidity", 0))) if env_data and env_data.get("humidity") else "N/A"
+                    # Vision and HR readings only
+                    readings = []
+                    readings.append(f"EAR:{fusion_data.get('avg_ear', 0):.3f}")
+                    readings.append(f"BLINK:{int(fusion_data.get('blink_rate', 0))}")
+                    readings.append(f"HR:{fusion_data.get('hr', 'N/A')}")
+                    if fusion_data.get('rmssd'):
+                        readings.append(f"HRV:{fusion_data.get('rmssd'):.0f}")
                     
-                    logger.info(f"{ear_reading:.2f} {int(blink_reading)} {hr_reading} {temp_reading} {humidity_reading}")
-                    
+                    logger.info(" | ".join(readings))
                     last_fusion_heartbeat = current_time
                 
-                # Send watchdog notification periodically (every 10 seconds)
-                if len(fusion_scores) >= 2 and current_time - last_heartbeat > 10:
+                # Watchdog notification
+                if current_time - last_heartbeat > 10:
                     systemd.daemon.notify('WATCHDOG=1')
                     last_heartbeat = current_time
             
             elif vision_data and not is_vision_fresh:
-                # Vision data exists but is stale - log warning periodically
+                # Stale data warning
                 if not hasattr(main, '_last_stale_warning') or current_time - main._last_stale_warning > 30:
-                    logger.warning(f"Vision data is stale ({vision_age:.1f}s old) - not setting system state")
+                    logger.warning(f"Vision data is stale ({vision_age:.1f}s old) - prediction unavailable")
                     main._last_stale_warning = current_time
             
-            # Send watchdog notification even when not processing
+            # Regular watchdog
             if current_time - last_heartbeat > 10:
                 systemd.daemon.notify('WATCHDOG=1')
                 last_heartbeat = current_time
             
-            time.sleep(0.05)  # 20Hz processing for faster fatigue detection
+            time.sleep(0.05)  # 20Hz processing
     
     except KeyboardInterrupt:
-        logger.info("Predictor service stopping...")
+        logger.info("Simplified Predictor service stopping...")
         core.shutdown()
 
 if __name__ == "__main__":

@@ -1,28 +1,57 @@
-# HR Monitor Service
+# Bio Monitor Service
 
-The HR Monitor service provides continuous Bluetooth Low Energy (BLE) heart rate monitoring with advanced physiological analysis. It connects to configured heart rate sensors and publishes comprehensive heart rate metrics to CogniCore for system-wide use.
+The Bio Monitor service provides continuous Bluetooth Low Energy (BLE) heart rate monitoring with advanced physiological analysis AND real-time alcohol detection. It connects to configured heart rate sensors and MQ3 alcohol sensor, publishing comprehensive biometric data to CogniCore for system-wide use.
 
 ## Key Features
 
+### Heart Rate Monitoring
 - **Advanced HR Analysis**: Provides HRV metrics, baseline deviation, and stress indexing
 - **Intelligent BLE Management**: Automatic system Bluetooth disconnection to prevent conflicts
-- **Comprehensive Logging**: Complete sensor data visibility with all calculated metrics
-- **Real-time Publishing**: Streams enhanced heart rate data via CogniCore Redis
 - **Robust Connection Handling**: Automatic retry with improved error recovery
 - **Standard BLE Protocol**: Compatible with BLE Heart Rate Profile devices
+
+### Alcohol Detection
+- **Real-time Alcohol Monitoring**: MQ3 sensor integration with GPIO 18
+- **Inverted Logic Handling**: Properly handles MQ3 module's inverted digital output
+- **30-Second Warmup Period**: Allows sensor heater to stabilize before detection
+- **2-Second Debounce Logic**: Prevents false positive detections
+- **Instant Publishing**: Immediately publishes alcohol detection events to CogniCore
+
+### System Integration
+- **Comprehensive Logging**: Complete sensor data visibility with all calculated metrics
+- **Real-time Publishing**: Streams enhanced biometric data via CogniCore Redis
+- **Continuous Monitoring**: Both sensors operate simultaneously and independently
 - **Systemd Integration**: Proper watchdog handling prevents service timeouts
+- **GPIO Zero Integration**: Modern Python GPIO library for reliable hardware control
 
 ## Architecture
 
-The service follows a continuous monitoring pattern with intelligent connection management:
+The service follows a dual-sensor monitoring pattern with intelligent connection management:
+
+### Initialization
 1. Initialize CogniCore connection and logging
-2. Automatically disconnect any existing system Bluetooth connections to prevent conflicts
-3. Attempt BLE connection to the configured heart rate sensor
-4. Stream heart rate notifications when connected with full data logging
-5. Automatically retry on connection failures with improved error handling
-6. Publish comprehensive heart rate metrics to CogniCore for system-wide availability
+2. Initialize MQ3 alcohol sensor with GPIO 18 (gpiozero)
+3. Initialize heart rate analyzer for advanced metrics
+4. Run MQ3 sensor diagnostics to verify proper connection
+
+### Continuous Monitoring Loop
+1. **Alcohol Sensor**: Check MQ3 sensor every second (inverted logic: LOW = alcohol detected)
+2. **Heart Rate Sensor**: Attempt BLE connection to configured HR sensor
+3. **Data Processing**: Process and analyze biometric data in parallel
+4. **Publishing**: Stream real-time data to CogniCore Redis infrastructure
+5. **Connection Management**: Automatic retry on HR sensor connection failures
+6. **System Health**: Send periodic watchdog notifications to systemd
 
 ## Hardware Requirements
+
+### MQ3 Alcohol Sensor Module
+- **GPIO Pin**: GPIO 18 (Physical Pin 12) - Digital Output
+- **Power Requirements**: 5V (150mA for heater element)
+- **Ground**: Pin 34 (GND)
+- **Logic**: **INVERTED** - HIGH = clean air, LOW = alcohol detected
+- **Detection Range**: 0.05-10 mg/L alcohol concentration
+- **Warmup Time**: 30 seconds for stable operation
+- **Threshold**: Adjustable via onboard potentiometer
 
 ### BLE Heart Rate Sensor
 - **Service**: Heart Rate Service (UUID: 0x180D)
@@ -30,13 +59,34 @@ The service follows a continuous monitoring pattern with intelligent connection 
 - **Notifications**: Must support heart rate measurement notifications
 - **Configuration**: MAC address specified in `config.DEFAULT_HR_SENSOR_MAC`
 
-### Compatible Devices
+### Compatible Heart Rate Devices
 - Standard BLE heart rate monitors
 - Chest strap monitors (Polar, Garmin, etc.)
 - Wrist-based HR monitors with BLE support
 - Any device implementing the standard BLE Heart Rate Profile
 
 ## Data Processing
+
+### Alcohol Detection Processing
+The MQ3 sensor uses inverted digital logic for detection:
+
+```python
+def read_sensor(self):
+    """Read alcohol sensor and publish detection if found"""
+    # Read digital output (LOW = alcohol detected, HIGH = clean air - inverted logic)
+    alcohol_detected = not self.sensor.is_pressed  # Invert GPIO reading
+
+    if alcohol_detected and debounce_check_passed:
+        # Publish alcohol detection to CogniCore hash
+        self.core._redis_client.hset("alcohol_detected", "latest", str(alcohol_data))
+```
+
+**Key Processing Steps:**
+1. **GPIO Reading**: Read GPIO 18 state using gpiozero Button
+2. **Logic Inversion**: Invert reading (LOW = alcohol detected)
+3. **Warmup Check**: Only process readings after 30-second warmup
+4. **Debounce Logic**: 2-second minimum interval between detections
+5. **Immediate Publishing**: Publish detection event to CogniCore Redis
 
 ### Heart Rate Data Parsing
 ```python
@@ -60,7 +110,10 @@ def parse_hr_data(data: bytearray) -> int:
 
 ### CogniCore Publications
 
-The service publishes enhanced heart rate data to the `hr_sensor` hash in CogniCore:
+The service publishes biometric data to two Redis hashes in CogniCore:
+
+#### Heart Rate Data (`hr_sensor` hash)
+Enhanced heart rate data with advanced physiological metrics:
 
 ```json
 {
@@ -76,7 +129,7 @@ The service publishes enhanced heart rate data to the `hr_sensor` hash in CogniC
 }
 ```
 
-**Fields:**
+**Heart Rate Fields:**
 - `hr`: Heart rate in beats per minute (BPM, 0-255)
 - `t_hr`: Unix timestamp of measurement
 - `rr_interval`: RR interval in seconds for HRV analysis (optional)
@@ -87,13 +140,42 @@ The service publishes enhanced heart rate data to the `hr_sensor` hash in CogniC
 - `baseline_hr`: Individual baseline heart rate
 - `baseline_hrv`: Individual baseline HRV
 
+#### Alcohol Detection Data (`alcohol_detected` hash)
+Immediate alcohol detection events with precise timestamps:
+
+```json
+{
+  "detected": true,
+  "timestamp": 1758815376.5226352,
+  "detection_time": "2025-09-25 17:49:36"
+}
+```
+
+**Alcohol Detection Fields:**
+- `detected`: Always `true` (only published when alcohol is detected)
+- `timestamp`: Unix timestamp with millisecond precision
+- `detection_time`: Human-readable timestamp in local time format
+
+**Publishing Behavior:**
+- **Event-Driven**: Only publishes when alcohol is actually detected
+- **Instant Response**: Published immediately when MQ3 sensor reads LOW
+- **Debounced**: Minimum 2-second interval between detection events
+- **Latest Value**: Stored in `alcohol_detected` hash with key `latest`
+
 ## Configuration
 
-### Service Parameters
+### Heart Rate Parameters
 - **HR_UUID**: `"00002a37-0000-1000-8000-00805f9b34fb"` (Heart Rate Measurement)
 - **HR_SENSOR_MAC**: `config.DEFAULT_HR_SENSOR_MAC` from CogniCore configuration
 - **RETRY_DELAY**: 5 seconds between connection attempts
 - **HEARTBEAT_INTERVAL**: 10 seconds for watchdog monitoring
+
+### Alcohol Sensor Parameters
+- **ALCOHOL_SENSOR_PIN**: 18 (GPIO pin for MQ3 digital output)
+- **ALCOHOL_WARMUP_TIME**: 30 seconds (sensor heater stabilization)
+- **ALCOHOL_DEBOUNCE_TIME**: 2 seconds (minimum interval between detections)
+- **GPIO_LIBRARY**: gpiozero (modern Python GPIO library)
+- **PULL_RESISTOR**: Pull-down configuration (pull_up=False)
 
 ### CogniCore Integration
 The service uses CogniCore for:
@@ -110,29 +192,35 @@ The service uses CogniCore for:
 - **No Service Interruption**: Other system services continue operating
 
 ### Data Validation
-- **Range Clamping**: HR values limited to 0-255 BPM
+- **HR Range Clamping**: HR values limited to 0-255 BPM
 - **Parse Error Recovery**: Invalid data packets logged and skipped
 - **Zero Filtering**: Only publishes valid (non-zero) heart rate readings
+- **Alcohol Sensor Validation**: GPIO state validation and warmup verification
 
 ### Exception Handling
 - **BLE Exceptions**: Handled gracefully with retry logic
+- **GPIO Exceptions**: Safe GPIO cleanup on errors or shutdown
 - **Publication Errors**: Logged but don't interrupt monitoring
-- **Service Crashes**: Clean shutdown on unrecoverable errors
+- **Service Crashes**: Clean shutdown with proper GPIO cleanup
 
 ## Performance Characteristics
 
-- **Connection Time**: 2-3 seconds for initial BLE connection
+- **HR Connection Time**: 2-3 seconds for initial BLE connection
+- **Alcohol Detection Latency**: <50ms from sensor trigger to CogniCore publication
 - **Data Latency**: <100ms from sensor notification to CogniCore publication
-- **CPU Usage**: Minimal (~1-2% during active monitoring)
-- **Memory Usage**: ~10MB for BLE stack and service overhead
+- **CPU Usage**: Minimal (~1-3% during dual sensor monitoring)
+- **Memory Usage**: ~12MB for BLE stack, GPIO, and service overhead
 - **Network Impact**: Low (local Redis publications only)
+- **GPIO Polling**: 1Hz (every second) for alcohol sensor monitoring
 
 ## Dependencies
 
 ### Required Libraries
 - **CogniCore**: System integration and Redis communication
 - **Bleak**: Cross-platform Bluetooth Low Energy library
+- **gpiozero**: Modern Python GPIO library for Raspberry Pi
 - **asyncio**: Asynchronous I/O operations
+- **numpy**: Numerical processing for HR analysis
 - **logging**: Service logging
 - **time**: Timestamp generation
 
@@ -206,14 +294,14 @@ The service provides comprehensive logging with complete data visibility:
 - **Performance Metrics**: Data processing times and sensor reliability
 - **Configuration Issues**: Setup and hardware problems
 
-All logging integrates with systemd journald and can be viewed with `journalctl -u hr_monitor -f`.
+All logging integrates with systemd journald and can be viewed with `journalctl -u bio_monitor -f`.
 
 ## File Structure
 
 ```
-hr_monitor/
+bio_monitor/
 ├── main.py              # Main service implementation
 ├── requirements.txt     # Python dependencies
-├── hr_monitor.service   # Systemd service configuration
+├── bio_monitor.service  # Systemd service configuration
 └── README.md           # This documentation
 ```

@@ -1,4 +1,4 @@
-module github.com/jeremiafourie/cogniflight-edge/services/https_client
+module github.com/jeremiafourie/cogniflight-edge/services/go_client
 
 go 1.24.6
 

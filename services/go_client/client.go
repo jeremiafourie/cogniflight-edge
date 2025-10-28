@@ -22,9 +22,9 @@ func GetPilots(ctx context.Context, api_client client.SocketClient) ([]PilotInfo
 	stderr := &bytes.Buffer{}
 	status, err := api_client.RunCommand(ctx, client.CommandOptions{
 		Command: "pilots",
-		Stdin: strings.NewReader(""),
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdin:   strings.NewReader(""),
+		Stdout:  stdout,
+		Stderr:  stderr,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to run pilots command: %w", err)
@@ -71,9 +71,9 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 	stderr.Reset()
 	status, err = api_client.RunCommand(ctx, client.CommandOptions{
 		Command: fmt.Sprintf("cat -n /home/%s/user.embedding", username),
-		Stdin: strings.NewReader(""),
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdin:   strings.NewReader(""),
+		Stdout:  stdout,
+		Stderr:  stderr,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to run cat command for user embedding: %w", err)
@@ -92,8 +92,8 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 		if len(data)%8 != 0 {
 			return nil, fmt.Errorf("user embedding have non-divisible length")
 		}
-		
-		embedding = make([]float64, len(data) / 8)
+
+		embedding = make([]float64, len(data)/8)
 		for i := 0; i < len(embedding); i++ {
 			bits := binary.LittleEndian.Uint64(data[i*8 : (i+1)*8])
 			embedding[i] = math.Float64frombits(bits)
@@ -185,7 +185,7 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 			return nil, fmt.Errorf("invalid flight YAML: %v", err)
 		}
 
-		if file.EndTimestamp == nil {
+		if file.EndTimestamp == 0 {
 			log.Println("Flight file relevant, no end yet")
 			flight_id = fmt.Sprint(max_num)
 		} else {
@@ -214,6 +214,6 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 		FlightID:      flight_id,
 		Authenticated: "true",
 		PersonalData:  string(json_bytes),
-		Embedding: embedding,
+		Embedding:     embedding,
 	}, nil
 }

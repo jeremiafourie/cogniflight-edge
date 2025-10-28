@@ -1,8 +1,6 @@
 package main
 
 import (
-	"time"
-
 	"github.com/RoundRobinHood/cogniflight-cloud/backend/types"
 )
 
@@ -24,5 +22,5 @@ type FileInfo struct {
 }
 
 type FlightFile struct {
-	EndTimestamp *time.Time `yaml:"end_timestamp"`
+	EndTimestamp uint64 `yaml:"end_timestamp"`
 }

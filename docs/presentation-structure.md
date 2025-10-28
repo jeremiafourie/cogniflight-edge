@@ -821,6 +821,54 @@ sequenceDiagram
 
 ---
 
+## Slide 8: Cloud Dashboard - Real-Time Fleet Monitoring
+
+**Edge Node Dashboard Application**
+
+Desktop-style web app for real-time monitoring of aircraft fleet with live MQTT telemetry streaming.
+
+**Key Features:**
+- **Multi-Node Grid View**: Monitor all aircraft simultaneously with color-coded alerts (green/yellow/orange/red)
+- **Real-Time Telemetry**: Heart rate, EAR, fusion score, temperature, g-forces, altitude
+- **Detailed Node View**:
+  - Attitude Indicator (artificial horizon)
+  - Cardiovascular vitals with trends
+  - Vision monitoring (EAR, blinks, yawns, microsleeps)
+  - 3D Accelerometer visualization
+  - Environmental metrics
+  - ML-powered fatigue analysis panel
+- **Security Alerts**: Full-screen intruder detection modal with red overlay
+- **Role-Based Access**: Admin/ATC see all nodes, Pilots see only own flights
+
+**Tech Stack:** React 19, Recharts, WebSocket (MessagePack), MQTT real-time streaming
+
+**Duration:** 1 minute
+
+---
+
+## Slide 9: Flights App - Flight Management & Reporting
+
+**Flights Application**
+
+Comprehensive flight tracking and telemetry reporting with PDF export.
+
+**Key Features:**
+- **Flight List**: Searchable table (flight number, edge ID, pilot, departure/arrival times)
+- **Real-Time Search**: Filter by flight number, pilot, or edge ID
+- **Flight Report**:
+  - 4-metric time-series chart: Heart Rate (red), Blink Rate (yellow), Temperature (blue), Fusion Score (green)
+  - Flight metadata: pilot, tail number, timestamps
+  - PDF export with embedded chart and auto-save to virtual filesystem
+- **Data Source**: InfluxDB telemetry + MongoDB flight metadata
+
+**User Workflow:**
+1. Open Flights app → View all flights
+2. Search specific flight/pilot
+3. Click "Report" → View telemetry chart
+4. Export PDF → Save to `/home/user/reports/`
+
+**Duration:** 1 minute
+
 
 ---
 

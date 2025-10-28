@@ -147,7 +147,7 @@ graph TB
     PYML --> INSIGHT
 
     MQTT --> INFLUX
-    MQTT -.Subscribe.-> GIN
+    GIN -.Subscribe.-> MQTT
 ```
 
 **Key Design Principles:**
@@ -209,8 +209,6 @@ flowchart TD
 
     FaceLost{Face Lost<br/>>10s?}
     FaceLost -->|No| Collect
-    FaceLost -->|Yes| Deauth[Deauthenticate<br/>Mark Flight Finished]
-    Deauth --> Scanning
 
     style Start fill:#90EE90
     style Monitor fill:#87CEEB
@@ -591,37 +589,47 @@ def handle_state_change(self, state_data: Dict[str, Any]):
 **Critical Code Snippet (Authentication):**
 ```go
 // backend/auth/login.go
-func Login(c *gin.Context) {
-    // Read credentials from file-based storage
-    credFile := fmt.Sprintf("/etc/passwd/%s.login", username)
-    credData, err := os.ReadFile(credFile)
+func Login(filestore filesystem.Store) gin.HandlerFunc {
+    return func(c *gin.Context) {
+       // Read credentials from file-based storage
+       credFile := fmt.Sprintf("/etc/passwd/%s.login", username)
+       credData, err := filestore.LookupReadAll(c.Request.Context(), credFile, []string{"sysadmin"})
 
-    // Validate password
-    if !util.CheckPwd(password, storedCred) {
-        c.JSON(401, gin.H{"error": "Invalid credentials"})
-        return
+       // Validate password
+       if !util.CheckPwd(password, storedCred) {
+           c.Status(401)
+           return
+       }
+
+       // Generate session token
+       sessID := util.GenerateToken()
+
+       // Write session to /etc/sess
+       sessFile := fmt.Sprintf("/etc/sess/%s", sessID)
+       writer, _ := (&filesystem.FSContext{Store: fileStore, UserTags: []string{"sysadmin"}}).Open(c.Request.Context(), sessFile, os.O_WRONLY | os.O_CREATE | os.O_EXCL, 0)
+       _, err := writer.Write([]byte(username))
+       err := writer.Close()
+
+       c.Status(200)
+       // Set cookie (1 hour duration)
+       c.SetCookie("sessid", sessID, 3600, "/",
+                   os.Getenv("COOKIE_DOMAIN"),
+                   os.Getenv("HTTPS") == "true", true)
     }
-
-    // Generate session token
-    sessID := util.GenerateToken()
-
-    // Write session to /etc/sess
-    sessFile := fmt.Sprintf("/etc/sess/%s", sessID)
-    os.WriteFile(sessFile, []byte(username), 0600)
-
-    // Set cookie (1 hour duration)
-    c.SetCookie("sessid", sessID, 3600, "/",
-                os.Getenv("COOKIE_DOMAIN"),
-                os.Getenv("HTTPS") == "true", true)
-
-    c.JSON(200, gin.H{"status": "ok"})
 }
 ```
 
-**Critical Code Snippet (WebSocket Command Interface):**
+**Critical Code Snippet (Starting up routers and WebSocket Command Interface):**
 ```go
 // backend/main.go - ML Engine Connection
 func main() {
+    // Start up MongoDB connection pool
+    client, err := mongo.Connect(ctx, options.Client().ApplyURI(uri))
+    database := client.Database("cogniflight")
+    bucket, err := gridfs.NewBucket(database)
+
+    fileStore := filesystem.Store{Col: database.Collection("vfs"), Bucket: bucket}
+
     // Connect to ML engine via Unix socket
     mlSockFile := os.Getenv("ML_SOCK_FILE")
     if mlSockFile == "" {
@@ -644,15 +652,12 @@ func main() {
     mlConn := jsonrpc2.NewConn(context.Background(), stream, nil)
 
     // Setup routes
-    r.GET("/signup/check-username/:username", signup.CheckUsernameAvailable)
-    r.POST("/signup", signup.Signup)
-    r.POST("/login", login.Login)
+    r.GET("/signup/check-username/:username", auth.SignupCheckUsername(fileStore))
+    r.POST("/signup", auth.Signup(fileStore))
+    r.POST("/login", auth.Login(filestore))
 
     // WebSocket endpoint for command interface
-    r.GET("/cmd-socket", auth_middleware.AuthMiddleware(),
-          func(c *gin.Context) {
-              cmd.CmdWebhook(c, mlConn, mongoClient, influxClient)
-          })
+    r.GET("/cmd-socket", auth.AuthMiddleware(fileStore), cmd.CmdWebhook(fileStore, ...))
 }
 ```
 
@@ -684,7 +689,7 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
     // Decode base64 embedding (512-dimensional float64 array)
     data, _ := base64.StdEncoding.DecodeString(stdout.String())
     embedding := make([]float64, len(data)/8)
-    for i := 0; i < len(embedding); i++ {
+    for i := 0; i < len(embedding) / 8; i++ {
         bits := binary.LittleEndian.Uint64(data[i*8 : (i+1)*8])
         embedding[i] = math.Float64frombits(bits)
     }
@@ -777,22 +782,29 @@ SOA Components:
   - Returns: `{fusion_score, confidence, criticality, reasoning, trends, recommendations}`
 
 **Architecture:**
-```
-Edge Device                Cloud Backend              ML Engine
-    │                           │                         │
-    │  Photo + username         │                         │
-    ├──────────────────────────►│                         │
-    │      (WebSocket)           │                         │
-    │                           │  generate_embedding()   │
-    │                           ├────────────────────────►│
-    │                           │   (JSON-RPC via Unix)   │
-    │                           │                         │
-    │                           │   Return 512D vector    │
-    │                           │◄────────────────────────┤
-    │                           │                         │
-    │  Store to GridFS          │                         │
-    │  /home/{user}/embedding   │                         │
-    │                           │                         │
+```mermaid
+sequenceDiagram
+    participant FE as Frontend (Browser)
+    participant BE as Cloud Backend
+    participant ML as ML Engine
+    participant Edge as Edge Device
+
+    FE->>BE: Connect with WebSocket
+    FE->>BE: Upload image
+    BE->>BE: Store image in VFS
+    BE->>FE: Acknowledge success
+    FE->>BE: Generate embeddings from file
+    BE->>ML: generate_embedding() (JSON-RPC via Unix)
+    ML-->>BE: Return 512D vector
+    BE-->>FE: Send back embedding
+    FE->>BE: Save embedding (/home/{user}/user.embedding)
+    BE->>BE: Store image in VFS
+    BE->>FE: Acknowledge success
+
+    Note over Edge,BE: Later, during device startup
+    Edge->>BE: Request embedding with filename
+    BE->>BE: Retrieve from GridFS
+    BE-->>Edge: Send embedding data
 ```
 
 **Why It Matters:**

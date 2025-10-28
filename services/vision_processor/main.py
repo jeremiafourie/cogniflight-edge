@@ -197,12 +197,18 @@ class UnifiedVisionService:
             # Load each embedding
             for pilot_username in all_pilot_usernames:
                 try:
-                    embedding_data = self.core.get_data(f'embedding:{pilot_username}')
-                    if embedding_data and 'embedding' in embedding_data:
-                        # Parse embedding
-                        embedding = embedding_data['embedding']
-                        if isinstance(embedding, str):
-                            embedding = json.loads(embedding)
+                    # Updated to use direct Redis GET instead of HGETALL
+                    # Embeddings are now stored as: SET cognicore:data:embedding:{pilot_username} <json_array>
+                    embedding_key = f"cognicore:data:embedding:{pilot_username}"
+                    embedding_json = redis_client.get(embedding_key)
+
+                    if embedding_json:
+                        # Decode bytes to string if necessary
+                        if isinstance(embedding_json, bytes):
+                            embedding_json = embedding_json.decode('utf-8')
+
+                        # Parse JSON string to get the embedding array
+                        embedding = json.loads(embedding_json)
                         embedding_array = np.array(embedding, dtype=np.float32)
 
                         # Normalize embedding
@@ -210,7 +216,7 @@ class UnifiedVisionService:
                         embedding_array = normalize_embedding(embedding_array)
 
                         embeddings[pilot_username] = embedding_array
-                        self.logger.debug(f"Loaded embedding for pilot {pilot_username}")
+                        self.logger.debug(f"Loaded embedding for pilot {pilot_username} (shape: {embedding_array.shape})")
                 except Exception as e:
                     self.logger.warning(f"Failed to load embedding for {pilot_username}: {e}")
 

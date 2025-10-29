@@ -210,10 +210,9 @@ func GetPilotFromServer(ctx context.Context, api_client client.SocketClient, use
 	}
 
 	return &PilotInfo{
-		Username:      username,
-		FlightID:      flight_id,
-		Authenticated: "true",
-		PersonalData:  string(json_bytes),
-		Embedding:     embedding,
+		Username:     username,
+		FlightID:     flight_id,
+		PersonalData: string(json_bytes),
+		Embedding:    embedding,
 	}, nil
 }

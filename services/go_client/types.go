@@ -7,7 +7,7 @@ import (
 type PilotInfo struct {
 	Username      string    `redis:"pilot_username,omitempty"`
 	FlightID      string    `redis:"flight_id,omitempty"`
-	Authenticated string    `redis:"authenticated,omitempty"`
+	Authenticated string    `redis:"authenticated,omitempty" hash:"ignore"`
 	PersonalData  string    `redis:"personal_data,omitempty"`
 	Embedding     []float64 `redis:"-"`
 }

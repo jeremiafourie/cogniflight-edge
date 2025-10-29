@@ -106,6 +106,7 @@ func main() {
 				log.Printf("failed to get pilot from server: %v", err)
 				rdb.HSet(context.Background(), fmt.Sprintf("cognicore:data:pilot:%s", username), "authenticated", true)
 			} else {
+				pilot.Authenticated = "true"
 				rdb.HSet(context.Background(), fmt.Sprintf("cognicore:data:pilot:%s", username), pilot)
 			}
 		}
